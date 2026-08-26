@@ -1,0 +1,25 @@
+{
+  "name": "vms-backend",
+  "version": "1.0.0",
+  "description": "Sathya Sai Grama Visitor Management System Backend API",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "node --watch src/app.js",
+    "seed": "node src/db/seedRunner.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.13.3",
+    "pg-mem": "^3.0.4",
+    "qrcode": "^1.5.4",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.1",
+    "ws": "^8.18.0",
+    "zod": "^3.24.2"
+  }
+}
