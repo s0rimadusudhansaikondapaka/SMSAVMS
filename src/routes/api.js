@@ -712,6 +712,11 @@ router.put('/admin/approvers-config/:id', authenticateToken, requireRoles('ADMIN
       [req.user.id, 'UPDATE_APPROVER_CONFIG', 'APPROVER_CONFIG', parseInt(id), `Approver config #${id} updated by ${req.user.name}`]
     );
     res.json({ success: true, message: 'Approver configuration updated.' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Failed to update approver config.' });
+  }
+});
+
 // Admin User & Bulk Upload Endpoints
 router.get('/departments', getDepartments);
 router.get('/admin/users', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD', 'SUPERVISOR'), getAllUsers);

@@ -17,19 +17,22 @@ CREATE TABLE departments (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 2. Users Table (Roles: RESIDENT, EMPLOYEE, HOD, GUARD, SUPERVISOR, SECURITY_HEAD, ADMIN)
+-- 2. Users Table (Roles: RESIDENT, EMPLOYEE, HOD, PRO, GUARD, SUPERVISOR, SECURITY_HEAD, ADMIN)
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
     email VARCHAR(150) UNIQUE NOT NULL,
     phone VARCHAR(20) NOT NULL,
-    role VARCHAR(50) NOT NULL CHECK (role IN ('RESIDENT', 'EMPLOYEE', 'HOD', 'GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN')),
+    role VARCHAR(50) NOT NULL CHECK (role IN ('RESIDENT', 'EMPLOYEE', 'HOD', 'PRO', 'GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN')),
     residency_status VARCHAR(50) NOT NULL CHECK (residency_status IN ('RESIDENT', 'NON_RESIDENT')),
     department_id INT REFERENCES departments(id) ON DELETE SET NULL,
     password_hash VARCHAR(255) NOT NULL,
     otp_code VARCHAR(6),
     otp_expires_at TIMESTAMP,
     registration_status VARCHAR(20) DEFAULT 'ACTIVE' CHECK (registration_status IN ('PENDING_APPROVAL', 'ACTIVE', 'REJECTED', 'SUSPENDED')),
+    gender VARCHAR(20) DEFAULT 'Male',
+    profile_photo_url TEXT,
+    flat_info VARCHAR(100),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -156,5 +159,14 @@ CREATE TABLE approvers_config (
     l2_to_security_head BOOLEAN DEFAULT FALSE,
     l2_time_condition_start TIME,
     l2_time_condition_end TIME,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 11. User Feedback Table (PDF Page 15)
+CREATE TABLE feedback (
+    id SERIAL PRIMARY KEY,
+    user_id INT REFERENCES users(id) ON DELETE CASCADE,
+    subject VARCHAR(100) NOT NULL, -- Technical issue, Data issue, Suggestion, Compliment
+    content TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

@@ -474,6 +474,96 @@ async function getVisitHistory(req, res) {
   }
 }
 
+// 6. Public Host Details lookup for Shared Visitor Link (PDF Page 6-7)
+async function getPublicHostInfo(req, res) {
+  const { host_id } = req.params;
+  try {
+    const result = await db.query('SELECT id, name, residency_status FROM users WHERE id = $1', [host_id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Host not found.' });
+    }
+    res.json({ success: true, host: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Failed to fetch host details.' });
+  }
+}
+
+// 7. Public Visitor Form Submission from Shared Link (PDF Page 7)
+async function createPublicVisitorRegistration(req, res) {
+  const {
+    host_id,
+    full_name,
+    phone,
+    gender,
+    registration_mode,
+    adult_men_count,
+    adult_women_count,
+    children_count,
+    valid_from,
+    photo_url,
+    purpose,
+  } = req.body;
+
+  if (!host_id || !full_name || !phone) {
+    return res.status(400).json({ success: false, message: 'Host ID, Full Name, and Phone are required.' });
+  }
+
+  try {
+    await db.query('BEGIN');
+
+    let visitorId;
+    const existing = await db.query('SELECT id FROM visitors WHERE phone = $1', [phone]);
+    if (existing.rows.length > 0) {
+      visitorId = existing.rows[0].id;
+      await db.query('UPDATE visitors SET full_name = $1, gender = $2, photo_url = COALESCE($3, photo_url) WHERE id = $4', [full_name, gender || 'Male', photo_url || '', visitorId]);
+    } else {
+      const newV = await db.query(
+        'INSERT INTO visitors (full_name, phone, gender, photo_url) VALUES ($1, $2, $3, $4) RETURNING id',
+        [full_name, phone, gender || 'Male', photo_url || '']
+      );
+      visitorId = newV.rows[0].id;
+    }
+
+    const passCode = `PASS-${Math.floor(1000 + Math.random() * 9000)}`;
+    const validFromTime = valid_from ? new Date(valid_from) : new Date();
+    const validUntilTime = new Date(validFromTime.getTime() + 12 * 60 * 60 * 1000);
+
+    const menCount = parseInt(adult_men_count) || 1;
+    const womenCount = parseInt(adult_women_count) || 0;
+    const kidsCount = parseInt(children_count) || 0;
+    const totalCount = menCount + womenCount + kidsCount;
+
+    const regRes = await db.query(
+      `INSERT INTO registrations 
+       (visitor_id, host_id, purpose, registration_mode, registration_type, visit_type, priority, status, pass_code, valid_from, valid_until, adult_men_count, adult_women_count, children_count, person_count, host_notified_at)
+       VALUES ($1, $2, $3, $4, 'PRE_APPROVAL', 'HOME', 'P3', 'PENDING_L1', $5, $6, $7, $8, $9, $10, $11, NOW())
+       RETURNING *`,
+      [visitorId, host_id, purpose || 'Visitor Self-Filled Form via Share Link', registration_mode || 'Single', passCode, validFromTime, validUntilTime, menCount, womenCount, kidsCount, totalCount]
+    );
+
+    const registration = regRes.rows[0];
+
+    await db.query(
+      `INSERT INTO audit_logs (action, entity_type, entity_id, remarks) VALUES ($1, $2, $3, $4)`,
+      ['PUBLIC_VISITOR_SUBMIT', 'REGISTRATION', registration.id, `Visitor ${full_name} submitted self-invite form for Host #${host_id}`]
+    );
+
+    await db.query('COMMIT');
+
+    broadcastSyncEvent('PUBLIC_VISITOR_SUBMITTED', { registration, host_id });
+
+    res.status(201).json({
+      success: true,
+      message: 'Visitor information submitted successfully! Awaiting host approval.',
+      pass_code: passCode,
+    });
+  } catch (err) {
+    await db.query('ROLLBACK');
+    console.error('Error submitting public visitor registration:', err);
+    res.status(500).json({ success: false, message: 'Failed to submit visitor registration.' });
+  }
+}
+
 module.exports = {
   createRegistration,
   updateApproval,
@@ -481,4 +571,6 @@ module.exports = {
   updateRegistration,
   isL2Enabled,
   getVisitHistory,
+  getPublicHostInfo,
+  createPublicVisitorRegistration,
 };
