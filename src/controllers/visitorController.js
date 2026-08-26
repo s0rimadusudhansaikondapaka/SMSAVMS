@@ -149,7 +149,7 @@ async function createRegistration(req, res) {
 
     // Set host notification timestamp for timeout tracking
     if (registration.host_id && initialStatus === 'PENDING_L1') {
-      await db.query('UPDATE registrations SET host_notified_at = NOW() WHERE id = $1', [registration.id]);
+      await db.query('UPDATE registrations SET host_notified_at = CURRENT_TIMESTAMP WHERE id = $1', [registration.id]);
     }
 
     // Insert Multiple Registered Vehicles if provided
@@ -536,7 +536,7 @@ async function createPublicVisitorRegistration(req, res) {
     const regRes = await db.query(
       `INSERT INTO registrations 
        (visitor_id, host_id, purpose, registration_mode, registration_type, visit_type, priority, status, pass_code, valid_from, valid_until, adult_men_count, adult_women_count, children_count, person_count, host_notified_at)
-       VALUES ($1, $2, $3, $4, 'PRE_APPROVAL', 'HOME', 'P3', 'PENDING_L1', $5, $6, $7, $8, $9, $10, $11, NOW())
+       VALUES ($1, $2, $3, $4, 'PRE_APPROVAL', 'HOME', 'P3', 'PENDING_L1', $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
        RETURNING *`,
       [visitorId, host_id, purpose || 'Visitor Self-Filled Form via Share Link', registration_mode || 'Single', passCode, validFromTime, validUntilTime, menCount, womenCount, kidsCount, totalCount]
     );

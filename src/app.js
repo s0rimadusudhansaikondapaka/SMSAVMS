@@ -12,7 +12,38 @@ const { startExpiryService } = require('./controllers/expiryService');
 const app = express();
 const PORT = process.env.PORT || 5004;
 
-app.use(cors());
+const defaultAllowedOrigins = [
+  'https://vms-qrf6.onrender.com',
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'http://localhost:5004'
+];
+
+const envOrigins = (process.env.CORS_ORIGIN || process.env.FRONTEND_URL || '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+const allowedOrigins = Array.from(new Set([...defaultAllowedOrigins, ...envOrigins]))
+  .map((o) => o.replace(/\/$/, ''));
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    const cleanOrigin = origin.replace(/\/$/, '');
+    if (allowedOrigins.includes('*') || allowedOrigins.includes(cleanOrigin)) {
+      return callback(null, true);
+    }
+    // Fallback to allow request
+    return callback(null, true);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 
 // Interactive Swagger API Documentation UI

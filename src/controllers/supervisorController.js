@@ -10,8 +10,8 @@ async function getOverstayAlerts(req, res) {
        FROM registrations r 
        JOIN visitors v ON r.visitor_id = v.id 
        LEFT JOIN users u ON r.host_id = u.id 
-       WHERE r.status = 'INSIDE_CAMPUS' AND r.valid_to < NOW()
-       ORDER BY r.valid_to ASC`
+       WHERE r.status = 'INSIDE_CAMPUS' AND r.valid_until < CURRENT_TIMESTAMP
+       ORDER BY r.valid_until ASC`
     );
     res.json({ success: true, count: result.rows.length, overstays: result.rows });
   } catch (err) {
@@ -124,8 +124,8 @@ async function adminEmergencyPass(req, res) {
 
     const regRes = await db.query(
       `INSERT INTO registrations 
-       (visitor_id, host_id, purpose, visit_type, stay_required, accommodation_approved, priority, status, pass_code, qr_code_url, valid_from, valid_to, is_vvip, bypassed_by_admin)
-       VALUES ($1, $2, $3, 'EMERGENCY', true, true, 'P1', 'APPROVED', $4, $5, NOW(), NOW() + INTERVAL '24 hours', true, true)
+       (visitor_id, host_id, purpose, visit_type, stay_required, accommodation_approved, priority, status, pass_code, qr_code_url, valid_from, valid_until, is_vvip, bypassed_by_admin)
+       VALUES ($1, $2, $3, 'EMERGENCY', true, true, 'P1', 'APPROVED', $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + INTERVAL '24 hours', true, true)
        RETURNING *`,
       [visitorId, req.user.id, purpose || 'Admin Emergency Instant Pass', passCode, qrCodeUrl]
     );
@@ -161,7 +161,7 @@ async function toggleL2Approval(req, res) {
 
   try {
     await db.query(
-      `INSERT INTO system_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
+      `INSERT INTO system_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = CURRENT_TIMESTAMP`,
       [targetKey, strVal]
     );
 

@@ -17,7 +17,7 @@ async function checkExpiredRequests() {
       `UPDATE registrations 
        SET status = 'EXPIRED' 
        WHERE status IN ('PENDING_L1', 'PENDING_L2', 'PENDING_ACCOMMODATION') 
-       AND valid_until < NOW()
+       AND valid_until < CURRENT_TIMESTAMP
        RETURNING id, pass_code`
     );
     if (result.rows.length > 0) {
@@ -46,7 +46,7 @@ async function checkHostTimeout() {
        SET status = 'REJECTED' 
        WHERE status = 'PENDING_L1' 
        AND host_notified_at IS NOT NULL 
-       AND host_notified_at < NOW() - INTERVAL '1 minute' * $1
+       AND host_notified_at < CURRENT_TIMESTAMP - INTERVAL '1 minute' * $1
        RETURNING id, pass_code, host_id`,
       [timeoutMinutes]
     );
@@ -77,15 +77,15 @@ async function checkReminders() {
        JOIN visitors v ON r.visitor_id = v.id
        WHERE r.status IN ('PENDING_L1', 'PENDING_L2', 'PENDING_ACCOMMODATION')
        AND r.reminder_sent_at IS NULL
-       AND r.valid_from <= NOW() + INTERVAL '1 minute' * $1
-       AND r.valid_from > NOW()`,
+       AND r.valid_from <= CURRENT_TIMESTAMP + INTERVAL '1 minute' * $1
+       AND r.valid_from > CURRENT_TIMESTAMP`,
       [reminderMinutes]
     );
     if (result.rows.length > 0) {
       console.log(`[Expiry Service] Sending reminders for ${result.rows.length} request(s):`, result.rows.map(r => r.pass_code));
       for (const reg of result.rows) {
         await db.query(
-          `UPDATE registrations SET reminder_sent_at = NOW() WHERE id = $1`,
+          `UPDATE registrations SET reminder_sent_at = CURRENT_TIMESTAMP WHERE id = $1`,
           [reg.id]
         );
         await db.query(
