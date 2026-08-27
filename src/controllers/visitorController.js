@@ -775,6 +775,83 @@ async function generateRegistrationQr(req, res) {
   }
 }
 
+// Public Passcard Details lookup by Passcode for WhatsApp/Email View
+async function getPublicPassDetails(req, res) {
+  const { pass_code } = req.params;
+  try {
+    const result = await db.query(
+      `SELECT r.*, v.full_name as visitor_name, v.phone as visitor_phone, v.photo_url as visitor_photo, u.name as host_name
+       FROM registrations r 
+       JOIN visitors v ON r.visitor_id = v.id 
+       LEFT JOIN users u ON r.host_id = u.id 
+       WHERE r.pass_code = $1 OR CAST(r.id AS VARCHAR) = $1`,
+      [pass_code]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Gate pass not found.' });
+    }
+
+    const reg = result.rows[0];
+    let qrCodeUrl = reg.qr_code_url;
+    if (!qrCodeUrl) {
+      const qrData = JSON.stringify({ passCode: reg.pass_code, regId: reg.id, isVvip: reg.is_vvip });
+      qrCodeUrl = await QRCode.toDataURL(qrData);
+    }
+
+    res.json({
+      success: true,
+      pass: {
+        id: reg.id,
+        pass_code: reg.pass_code,
+        visitor_name: reg.visitor_name,
+        visitor_phone: reg.visitor_phone,
+        visitor_photo: reg.visitor_photo,
+        host_name: reg.host_name,
+        status: reg.status,
+        qr_code_url: qrCodeUrl,
+        valid_from: reg.valid_from,
+        valid_until: reg.valid_until,
+        is_permanent_pass: reg.is_permanent_pass,
+        person_count: reg.person_count,
+        registration_mode: reg.registration_mode,
+      }
+    });
+  } catch (err) {
+    console.error('Error fetching public pass details:', err);
+    res.status(500).json({ success: false, message: 'Failed to fetch public pass details.' });
+  }
+}
+
+// Direct PNG Image endpoint for WhatsApp preview & attachment download
+async function getQrCodePngImage(req, res) {
+  let pass_code = req.params.pass_code || '';
+  if (pass_code.endsWith('.png')) {
+    pass_code = pass_code.slice(0, -4);
+  }
+  try {
+    const result = await db.query(
+      'SELECT pass_code, id, is_vvip FROM registrations WHERE pass_code = $1 OR CAST(id AS VARCHAR) = $1',
+      [pass_code]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).send('Pass not found');
+    }
+
+    const reg = result.rows[0];
+    const qrData = JSON.stringify({ passCode: reg.pass_code, regId: reg.id, isVvip: reg.is_vvip });
+    const buffer = await QRCode.toBuffer(qrData, { type: 'png', width: 400, margin: 2 });
+
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.send(buffer);
+  } catch (err) {
+    console.error('Error generating QR PNG:', err);
+    res.status(500).send('Failed to render QR Code image.');
+  }
+}
+
 module.exports = {
   createRegistration,
   updateApproval,
@@ -786,4 +863,6 @@ module.exports = {
   getPublicHostInfo,
   createPublicVisitorRegistration,
   generateInviteToken,
+  getPublicPassDetails,
+  getQrCodePngImage,
 };

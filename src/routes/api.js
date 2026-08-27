@@ -13,7 +13,9 @@ const {
   getVisitHistory,
   getPublicHostInfo,
   createPublicVisitorRegistration,
-  generateInviteToken
+  generateInviteToken,
+  getPublicPassDetails,
+  getQrCodePngImage
 } = require('../controllers/visitorController');
 const { 
   verifyGatePass, 
@@ -326,6 +328,8 @@ router.post('/registrations/generate-qr', authenticateToken, generateRegistratio
 router.post('/registrations/generate-invite-token', authenticateToken, generateInviteToken);
 router.get('/registrations/public-host/:host_id', getPublicHostInfo);
 router.post('/registrations/public-visitor', createPublicVisitorRegistration);
+router.get('/registrations/public-pass/:pass_code', getPublicPassDetails);
+router.get('/registrations/qr-image/:pass_code', getQrCodePngImage);
 
 /**
  * @openapi

@@ -8,7 +8,28 @@ async function verifyGatePass(req, res) {
     return res.status(400).json({ success: false, message: 'Search parameter required.' });
   }
 
-  const cleanQuery = query.trim();
+  let cleanQuery = query.trim();
+
+  // Parse scanned QR content if JSON payload e.g. {"passCode":"PASS-1001", ...}
+  if (cleanQuery.startsWith('{') && cleanQuery.endsWith('}')) {
+    try {
+      const parsed = JSON.parse(cleanQuery);
+      if (parsed.passCode || parsed.pass_code) {
+        cleanQuery = (parsed.passCode || parsed.pass_code).trim();
+      }
+    } catch (e) {
+      // Ignore JSON parse error and proceed with raw string
+    }
+  }
+
+  // Parse scanned QR content if URL link e.g. http://localhost:3000/?pass=PASS-1001 or /pass/PASS-1001
+  if (cleanQuery.includes('pass=')) {
+    const match = cleanQuery.match(/pass=([A-Za-z0-9_-]+)/);
+    if (match) cleanQuery = match[1];
+  } else if (cleanQuery.includes('/pass/')) {
+    const match = cleanQuery.match(/\/pass\/([A-Za-z0-9_-]+)/);
+    if (match) cleanQuery = match[1];
+  }
 
   try {
     // Allows searching by Passcode, Phone Number (for delivery boys/frequent visitors), Vehicle No, or Registration ID
