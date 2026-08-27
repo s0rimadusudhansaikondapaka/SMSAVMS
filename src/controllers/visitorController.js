@@ -63,7 +63,14 @@ async function createRegistration(req, res) {
     }
 
     const validFromTime = valid_from ? new Date(valid_from) : new Date();
-    const validUntilTime = valid_until ? new Date(valid_until) : new Date(Date.now() + 12 * 60 * 60 * 1000);
+    let validUntilTime;
+    if (valid_until) {
+      validUntilTime = new Date(valid_until);
+    } else {
+      validUntilTime = new Date(validFromTime);
+      validUntilTime.setDate(validUntilTime.getDate() + 1);
+      validUntilTime.setHours(21, 0, 0, 0); // Default to Tomorrow 9:00 PM
+    }
 
     // Determine initial status based on approval matrix & L2 setting
     const l2Enabled = await isL2Enabled();
@@ -536,7 +543,14 @@ async function createPublicVisitorRegistration(req, res) {
 
     const passCode = `PASS-${Math.floor(1000 + Math.random() * 9000)}`;
     const validFromTime = valid_from ? new Date(valid_from) : new Date();
-    const validUntilTime = new Date(validFromTime.getTime() + 12 * 60 * 60 * 1000);
+    let validUntilTime;
+    if (valid_until) {
+      validUntilTime = new Date(valid_until);
+    } else {
+      validUntilTime = new Date(validFromTime);
+      validUntilTime.setDate(validUntilTime.getDate() + 1);
+      validUntilTime.setHours(21, 0, 0, 0); // Default to Tomorrow 9:00 PM
+    }
 
     const menCount = parseInt(adult_men_count) || 1;
     const womenCount = parseInt(adult_women_count) || 0;
