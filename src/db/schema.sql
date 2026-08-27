@@ -9,6 +9,9 @@ DROP TABLE IF EXISTS visitors CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
 DROP TABLE IF EXISTS departments CASCADE;
 DROP TABLE IF EXISTS system_settings CASCADE;
+DROP TABLE IF EXISTS approvers_config CASCADE;
+DROP TABLE IF EXISTS feedback CASCADE;
+DROP TABLE IF EXISTS invite_tokens CASCADE;
 
 -- 1. Departments Table
 CREATE TABLE departments (
@@ -20,6 +23,7 @@ CREATE TABLE departments (
 -- 2. Users Table (Roles: RESIDENT, EMPLOYEE, HOD, PRO, GUARD, SUPERVISOR, SECURITY_HEAD, ADMIN)
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,
+    guid VARCHAR(64) UNIQUE,
     name VARCHAR(100) NOT NULL,
     email VARCHAR(150) UNIQUE NOT NULL,
     phone VARCHAR(20) NOT NULL,
@@ -69,7 +73,7 @@ CREATE TABLE registrations (
     visit_type VARCHAR(50) DEFAULT 'OFFICE' CHECK (visit_type IN ('HOME', 'OFFICE', 'TOUR', 'BHAJAN', 'EVENT', 'EMERGENCY')),
     stay_required BOOLEAN DEFAULT FALSE,
     accommodation_approved BOOLEAN DEFAULT FALSE,
-    priority VARCHAR(10) DEFAULT 'P3' CHECK (priority IN ('P1', 'P2', 'P3')),
+    priority VARCHAR(10) DEFAULT 'P3' CHECK (priority IN ('P1', 'P2', 'P3', 'P4')),
     status VARCHAR(50) DEFAULT 'PENDING_L1' CHECK (status IN ('PENDING_L1', 'PENDING_L2', 'PENDING_ACCOMMODATION', 'APPROVED', 'REJECTED', 'INSIDE_CAMPUS', 'CHECKED_OUT', 'EXPIRED', 'NOT_ARRIVED', 'ADMIN_BYPASSED', 'ESCALATED')),
     pass_code VARCHAR(20) UNIQUE NOT NULL,
     qr_code_url TEXT,
@@ -172,5 +176,16 @@ CREATE TABLE feedback (
     user_id INT REFERENCES users(id) ON DELETE CASCADE,
     subject VARCHAR(100) NOT NULL, -- Technical issue, Data issue, Suggestion, Compliment
     content TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 12. Single-Use Invite Tokens Table
+CREATE TABLE invite_tokens (
+    id SERIAL PRIMARY KEY,
+    token VARCHAR(100) UNIQUE NOT NULL,
+    host_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    is_used BOOLEAN DEFAULT FALSE,
+    used_at TIMESTAMP,
+    registration_id INT REFERENCES registrations(id) ON DELETE SET NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

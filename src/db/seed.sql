@@ -10,14 +10,14 @@ INSERT INTO departments (name) VALUES
 ON CONFLICT (name) DO NOTHING;
 
 -- Users: Resident Host, Guard, Supervisor, Security Head, and System Admin
-INSERT INTO users (name, email, phone, role, residency_status, department_id, password_hash) VALUES
-('Srinivas Rao (Resident)', 'resident1@ashram.org', '+91 9876543210', 'RESIDENT', 'RESIDENT', 1, '$2b$10$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeg6Lruj3vjPGga31lW'),
-('Dr. Kumar (Resident Employee)', 'employee1@ashram.org', '+91 9876543211', 'EMPLOYEE', 'RESIDENT', 1, '$2b$10$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeg6Lruj3vjPGga31lW'),
-('Swami Nathan (Department HOD)', 'hod1@ashram.org', '+91 9876543212', 'HOD', 'RESIDENT', 1, '$2b$10$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeg6Lruj3vjPGga31lW'),
-('Ramesh Guard (North Gate Guard)', 'guard1@ashram.org', '+91 9876543213', 'GUARD', 'NON_RESIDENT', 4, '$2b$10$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeg6Lruj3vjPGga31lW'),
-('Suresh Supervisor (Security Officer)', 'supervisor1@ashram.org', '+91 9876543214', 'SUPERVISOR', 'RESIDENT', 4, '$2b$10$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeg6Lruj3vjPGga31lW'),
-('Major Rajesh (Security Head)', 'securityhead@ashram.org', '+91 9876543215', 'SECURITY_HEAD', 'RESIDENT', 4, '$2b$10$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeg6Lruj3vjPGga31lW'),
-('System Administrator (Super Admin)', 'admin@ashram.org', '+91 9876543216', 'ADMIN', 'RESIDENT', 5, '$2b$10$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeg6Lruj3vjPGga31lW');
+INSERT INTO users (guid, name, email, phone, role, residency_status, department_id, password_hash) VALUES
+('e9a18432-84b2-4d89-b7e1-8a9d3c5f7e12', 'Srinivas Rao (Resident)', 'resident1@ashram.org', '+91 9876543210', 'RESIDENT', 'RESIDENT', 1, '$2b$10$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeg6Lruj3vjPGga31lW'),
+('f83a9b2c-4e7f-4b3c-9a1b-2c3d4e5f6a7b', 'Dr. Kumar (Resident Employee)', 'employee1@ashram.org', '+91 9876543211', 'EMPLOYEE', 'RESIDENT', 1, '$2b$10$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeg6Lruj3vjPGga31lW'),
+('c72b8a1d-3e6f-4a2b-8c0d-1e2f3a4b5c6d', 'Swami Nathan (Department HOD)', 'hod1@ashram.org', '+91 9876543212', 'HOD', 'RESIDENT', 1, '$2b$10$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeg6Lruj3vjPGga31lW'),
+('b61a7f0e-2d5c-4b1a-7b9c-0d1e2f3a4b5c', 'Ramesh Guard (North Gate Guard)', 'guard1@ashram.org', '+91 9876543213', 'GUARD', 'NON_RESIDENT', 4, '$2b$10$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeg6Lruj3vjPGga31lW'),
+('a50f6e9d-1c4b-3a0f-6a8b-9c0d1e2f3a4b', 'Suresh Supervisor (Security Officer)', 'supervisor1@ashram.org', '+91 9876543214', 'SUPERVISOR', 'RESIDENT', 4, '$2b$10$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeg6Lruj3vjPGga31lW'),
+('940e5d8c-0b3a-2f9e-5f7a-8b9c0d1e2f3a', 'Major Rajesh (Security Head)', 'securityhead@ashram.org', '+91 9876543215', 'SECURITY_HEAD', 'RESIDENT', 4, '$2b$10$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeg6Lruj3vjPGga31lW'),
+('830d4c7b-9a2f-1e8d-4e6f-7a8b9c0d1e2f', 'System Administrator (Super Admin)', 'admin@ashram.org', '+91 9876543216', 'ADMIN', 'RESIDENT', 5, '$2b$10$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeg6Lruj3vjPGga31lW');
 
 -- Update HOD backlink in departments
 UPDATE departments SET hod_user_id = 3 WHERE id = 1;

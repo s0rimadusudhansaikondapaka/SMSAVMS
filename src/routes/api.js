@@ -12,7 +12,8 @@ const {
   isL2Enabled, 
   getVisitHistory,
   getPublicHostInfo,
-  createPublicVisitorRegistration
+  createPublicVisitorRegistration,
+  generateInviteToken
 } = require('../controllers/visitorController');
 const { 
   verifyGatePass, 
@@ -322,6 +323,7 @@ router.put('/registrations/:id', authenticateToken, updateRegistration);
  */
 router.post('/registrations/approve', authenticateToken, updateApproval);
 router.post('/registrations/generate-qr', authenticateToken, generateRegistrationQr);
+router.post('/registrations/generate-invite-token', authenticateToken, generateInviteToken);
 router.get('/registrations/public-host/:host_id', getPublicHostInfo);
 router.post('/registrations/public-visitor', createPublicVisitorRegistration);
 

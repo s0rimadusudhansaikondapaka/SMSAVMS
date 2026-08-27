@@ -3,6 +3,16 @@ const jwt = require('jsonwebtoken');
 const db = require('../config/db');
 const { JWT_SECRET } = require('../middlewares/auth');
 
+const crypto = require('crypto');
+
+function generateUserGuid(user) {
+  if (user && user.guid) return user.guid;
+  const idStr = user ? (user.id || '1') : '1';
+  const emailStr = user ? (user.email || 'user@sai.org') : 'user@sai.org';
+  const hash = crypto.createHash('sha256').update(`vms_guid_salt_${idStr}_${emailStr}`).digest('hex');
+  return `${hash.substring(0,8)}-${hash.substring(8,12)}-4${hash.substring(13,16)}-a${hash.substring(17,20)}-${hash.substring(20,32)}`;
+}
+
 async function login(req, res) {
   const { email, password } = req.body;
   if (!email || !password) {
@@ -36,8 +46,11 @@ async function login(req, res) {
       return res.status(401).json({ success: false, message: 'Invalid credentials.' });
     }
 
+    const userGuid = generateUserGuid(user);
+
     const payload = {
       id: user.id,
+      guid: userGuid,
       name: user.name,
       email: user.email,
       role: user.role,

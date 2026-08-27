@@ -212,7 +212,7 @@ async function createRegistration(req, res) {
 
 // 2. Host or Approver Process Approval / Rejection
 async function updateApproval(req, res) {
-  const { registration_id, action, remarks } = req.body;
+  const { registration_id, action, remarks, priority, visit_type, visitor_category, valid_from, valid_until } = req.body;
   if (!registration_id || !action) {
     return res.status(400).json({ success: false, message: 'Registration ID and action required.' });
   }
@@ -239,7 +239,7 @@ async function updateApproval(req, res) {
     } else if (action === 'APPROVE') {
       if (reg.stay_required && !reg.accommodation_approved) {
         newStatus = 'PENDING_ACCOMMODATION';
-      } else if (l2Enabled && reg.visit_type === 'OFFICE' && req.user.role !== 'HOD') {
+      } else if (l2Enabled && (visit_type || reg.visit_type) === 'OFFICE' && req.user.role !== 'HOD') {
         newStatus = 'PENDING_L2';
       } else {
         newStatus = 'APPROVED';
@@ -253,9 +253,30 @@ async function updateApproval(req, res) {
     }
 
     await db.query(
-      `UPDATE registrations SET status = $1, qr_code_url = $2, accommodation_approved = CASE WHEN $3 = true THEN true ELSE accommodation_approved END WHERE id = $4`,
-      [newStatus, qrCodeUrl, reg.stay_required && req.user.role === 'HOD', registration_id]
+      `UPDATE registrations 
+       SET status = $1, 
+           qr_code_url = $2, 
+           accommodation_approved = CASE WHEN $3 = true THEN true ELSE accommodation_approved END,
+           priority = COALESCE($4, priority),
+           visit_type = COALESCE($5, visit_type),
+           valid_from = COALESCE($6, valid_from),
+           valid_until = COALESCE($7, valid_until)
+       WHERE id = $8`,
+      [
+        newStatus, 
+        qrCodeUrl, 
+        reg.stay_required && req.user.role === 'HOD', 
+        priority || null,
+        visit_type || null,
+        valid_from ? new Date(valid_from) : null,
+        valid_until ? new Date(valid_until) : null,
+        registration_id
+      ]
     );
+
+    if (visitor_category) {
+      await db.query(`UPDATE visitors SET visitor_category = $1 WHERE id = $2`, [visitor_category, reg.visitor_id]);
+    }
 
     await db.query(
       `INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, remarks) VALUES ($1, $2, $3, $4, $5)`,
@@ -491,15 +512,109 @@ async function getVisitHistory(req, res) {
   }
 }
 
+const crypto = require('crypto');
+
+function generateUserGuid(user) {
+  if (!user) return '11111111-2222-4333-a444-555555555555';
+  if (user.guid) return user.guid;
+  const idStr = String(user.id || '1');
+  const emailStr = String(user.email || 'user@sai.org');
+  const hash = crypto.createHash('sha256').update(`vms_guid_salt_${idStr}_${emailStr}`).digest('hex');
+  return `${hash.substring(0,8)}-${hash.substring(8,12)}-4${hash.substring(13,16)}-a${hash.substring(17,20)}-${hash.substring(20,32)}`;
+}
+
+async function resolveHostUser(identifier) {
+  if (!identifier) return null;
+  const str = String(identifier).trim();
+  
+  if (!isNaN(str) && /^\d+$/.test(str)) {
+    const res = await db.query('SELECT id, name, residency_status, role, email FROM users WHERE id = $1', [parseInt(str)]);
+    if (res.rows.length > 0) return res.rows[0];
+  }
+
+  const allUsers = await db.query('SELECT id, name, residency_status, role, email FROM users');
+  for (const u of allUsers.rows) {
+    if (generateUserGuid(u) === str || String(u.id) === str) {
+      return u;
+    }
+  }
+
+  return allUsers.rows[0] || null;
+}
+
+// Ensure invite_tokens table exists
+async function ensureInviteTokensTable() {
+  try {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS invite_tokens (
+        id SERIAL PRIMARY KEY,
+        token VARCHAR(100) UNIQUE NOT NULL,
+        host_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        is_used BOOLEAN DEFAULT FALSE,
+        used_at TIMESTAMP,
+        registration_id INT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+  } catch (err) {
+    console.error('Error creating invite_tokens table:', err);
+  }
+}
+ensureInviteTokensTable();
+
+// Generate a Single-Use Invite Token
+async function generateInviteToken(req, res) {
+  try {
+    const hostId = req.user.id;
+    const token = `inv_${crypto.randomUUID()}`;
+    await db.query(
+      `INSERT INTO invite_tokens (token, host_id, is_used) VALUES ($1, $2, false)`,
+      [token, hostId]
+    );
+    res.json({ success: true, token, host_id: hostId });
+  } catch (err) {
+    console.error('Error generating invite token:', err);
+    res.status(500).json({ success: false, message: 'Failed to generate single-use invite token.' });
+  }
+}
+
 // 6. Public Host Details lookup for Shared Visitor Link (PDF Page 6-7)
 async function getPublicHostInfo(req, res) {
   const { host_id } = req.params;
   try {
-    const result = await db.query('SELECT id, name, residency_status FROM users WHERE id = $1', [host_id]);
-    if (result.rows.length === 0) {
+    // Check if single-use token
+    if (typeof host_id === 'string' && host_id.startsWith('inv_')) {
+      const tokenRes = await db.query(
+        `SELECT it.*, u.name, u.residency_status, u.role 
+         FROM invite_tokens it 
+         JOIN users u ON it.host_id = u.id 
+         WHERE it.token = $1`,
+        [host_id]
+      );
+      if (tokenRes.rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Invalid or non-existent invitation link.' });
+      }
+      const tok = tokenRes.rows[0];
+      if (tok.is_used) {
+        return res.json({
+          success: true,
+          is_used: true,
+          message: 'This invitation link has already been used to submit a visitor registration and is now expired.',
+          host: { id: tok.host_id, name: tok.name, residency_status: tok.residency_status }
+        });
+      }
+      return res.json({
+        success: true,
+        is_used: false,
+        host: { id: tok.host_id, name: tok.name, residency_status: tok.residency_status }
+      });
+    }
+
+    const host = await resolveHostUser(host_id);
+    if (!host) {
       return res.status(404).json({ success: false, message: 'Host not found.' });
     }
-    res.json({ success: true, host: result.rows[0] });
+    res.json({ success: true, is_used: false, host });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Failed to fetch host details.' });
   }
@@ -509,6 +624,7 @@ async function getPublicHostInfo(req, res) {
 async function createPublicVisitorRegistration(req, res) {
   const {
     host_id,
+    token,
     full_name,
     phone,
     gender,
@@ -517,15 +633,31 @@ async function createPublicVisitorRegistration(req, res) {
     adult_women_count,
     children_count,
     valid_from,
+    valid_until,
     photo_url,
     purpose,
   } = req.body;
 
+  const activeToken = token || (typeof host_id === 'string' && host_id.startsWith('inv_') ? host_id : null);
+
   if (!host_id || !full_name || !phone) {
-    return res.status(400).json({ success: false, message: 'Host ID, Full Name, and Phone are required.' });
+    return res.status(400).json({ success: false, message: 'Host ID/GUID, Full Name, and Phone are required.' });
   }
 
   try {
+    if (activeToken) {
+      const checkTok = await db.query('SELECT is_used FROM invite_tokens WHERE token = $1', [activeToken]);
+      if (checkTok.rows.length > 0 && checkTok.rows[0].is_used) {
+        return res.status(400).json({
+          success: false,
+          message: 'This invitation link has already been submitted. Re-submission is not allowed.'
+        });
+      }
+    }
+
+    const hostUser = await resolveHostUser(host_id);
+    const hostNumericId = hostUser ? hostUser.id : 1;
+
     await db.query('BEGIN');
 
     let visitorId;
@@ -562,10 +694,17 @@ async function createPublicVisitorRegistration(req, res) {
        (visitor_id, host_id, purpose, registration_mode, registration_type, visit_type, priority, status, pass_code, valid_from, valid_until, adult_men_count, adult_women_count, children_count, person_count, host_notified_at)
        VALUES ($1, $2, $3, $4, 'PRE_APPROVAL', 'HOME', 'P3', 'PENDING_L1', $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
        RETURNING *`,
-      [visitorId, host_id, purpose || 'Visitor Self-Filled Form via Share Link', registration_mode || 'Single', passCode, validFromTime, validUntilTime, menCount, womenCount, kidsCount, totalCount]
+      [visitorId, hostNumericId, purpose || 'Visitor Self-Filled Form via Share Link', registration_mode || 'Single', passCode, validFromTime, validUntilTime, menCount, womenCount, kidsCount, totalCount]
     );
 
     const registration = regRes.rows[0];
+
+    if (activeToken) {
+      await db.query(
+        `UPDATE invite_tokens SET is_used = true, used_at = CURRENT_TIMESTAMP, registration_id = $1 WHERE token = $2`,
+        [registration.id, activeToken]
+      );
+    }
 
     await db.query(
       `INSERT INTO audit_logs (action, entity_type, entity_id, remarks) VALUES ($1, $2, $3, $4)`,
@@ -646,4 +785,5 @@ module.exports = {
   getVisitHistory,
   getPublicHostInfo,
   createPublicVisitorRegistration,
+  generateInviteToken,
 };
