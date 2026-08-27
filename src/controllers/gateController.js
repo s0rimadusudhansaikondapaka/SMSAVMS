@@ -118,14 +118,16 @@ async function processGateMovement(req, res) {
 
     const menCount = adult_men_count !== undefined ? parseInt(adult_men_count) : reg.adult_men_count;
     const womenCount = adult_women_count !== undefined ? parseInt(adult_women_count) : reg.adult_women_count;
-    const kidsCount = children_count !== undefined ? parseInt(children_count) : reg.children_count;
-    const totalCount = menCount + womenCount + kidsCount;
+    const boysCount = req.body.boys_count !== undefined ? parseInt(req.body.boys_count) : (reg.boys_count || 0);
+    const girlsCount = req.body.girls_count !== undefined ? parseInt(req.body.girls_count) : (reg.girls_count || 0);
+    const kidsCount = children_count !== undefined ? parseInt(children_count) : (boysCount + girlsCount);
+    const totalCount = menCount + womenCount + boysCount + girlsCount;
 
     // Insert Gate Log
     const logRes = await db.query(
-      `INSERT INTO gate_logs (registration_id, visitor_id, gate_name, direction, person_count, adult_men_count, adult_women_count, children_count, vehicle_no, recorded_by_guard_id, remarks)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
-      [registration_id, reg.visitor_id, gate_name, direction, totalCount, menCount, womenCount, kidsCount, vehicle_no || '', req.user.id, remarks || '']
+      `INSERT INTO gate_logs (registration_id, visitor_id, gate_name, direction, person_count, adult_men_count, adult_women_count, children_count, boys_count, girls_count, vehicle_no, recorded_by_guard_id, remarks)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
+      [registration_id, reg.visitor_id, gate_name, direction, totalCount, menCount, womenCount, kidsCount, boysCount, girlsCount, vehicle_no || '', req.user.id, remarks || '']
     );
 
     // PPTX Requirement: Permanent Passcodes for Maids/Frequent Visitors reset to APPROVED upon exit for repeated daily entry!
@@ -135,8 +137,8 @@ async function processGateMovement(req, res) {
     }
 
     await db.query(
-      `UPDATE registrations SET status = $1, adult_men_count = $2, adult_women_count = $3, children_count = $4, person_count = $5 WHERE id = $6`,
-      [newStatus, menCount, womenCount, kidsCount, totalCount, registration_id]
+      `UPDATE registrations SET status = $1, adult_men_count = $2, adult_women_count = $3, children_count = $4, boys_count = $5, girls_count = $6, person_count = $7 WHERE id = $8`,
+      [newStatus, menCount, womenCount, kidsCount, boysCount, girlsCount, totalCount, registration_id]
     );
 
     await db.query(

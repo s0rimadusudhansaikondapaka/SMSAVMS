@@ -116,14 +116,16 @@ async function createRegistration(req, res) {
 
     const menCount = parseInt(adult_men_count) || 1;
     const womenCount = parseInt(adult_women_count) || 0;
-    const kidsCount = parseInt(children_count) || 0;
-    const totalCount = menCount + womenCount + kidsCount;
+    const boysCount = parseInt(req.body.boys_count) || 0;
+    const girlsCount = parseInt(req.body.girls_count) || 0;
+    const kidsCount = children_count !== undefined ? parseInt(children_count) : (boysCount + girlsCount);
+    const totalCount = menCount + womenCount + boysCount + girlsCount;
 
     // Insert Registration
     const regRes = await db.query(
       `INSERT INTO registrations 
-       (visitor_id, host_id, purpose, visit_type, stay_required, accommodation_approved, priority, status, pass_code, valid_from, valid_until, adult_men_count, adult_women_count, children_count, person_count, is_vvip)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+       (visitor_id, host_id, purpose, visit_type, stay_required, accommodation_approved, priority, status, pass_code, valid_from, valid_until, adult_men_count, adult_women_count, children_count, boys_count, girls_count, person_count, is_vvip)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
        RETURNING *`,
       [
         visitorId,
@@ -140,6 +142,8 @@ async function createRegistration(req, res) {
         menCount,
         womenCount,
         kidsCount,
+        boysCount,
+        girlsCount,
         totalCount,
         is_vvip || false,
       ]
@@ -367,8 +371,10 @@ async function updateRegistration(req, res) {
     // Recalculate guest counts & times
     const menCount = adult_men_count !== undefined ? parseInt(adult_men_count) : reg.adult_men_count;
     const womenCount = adult_women_count !== undefined ? parseInt(adult_women_count) : reg.adult_women_count;
-    const kidsCount = children_count !== undefined ? parseInt(children_count) : reg.children_count;
-    const totalCount = menCount + womenCount + kidsCount;
+    const boysCount = req.body.boys_count !== undefined ? parseInt(req.body.boys_count) : (reg.boys_count || 0);
+    const girlsCount = req.body.girls_count !== undefined ? parseInt(req.body.girls_count) : (reg.girls_count || 0);
+    const kidsCount = children_count !== undefined ? parseInt(children_count) : (boysCount + girlsCount);
+    const totalCount = menCount + womenCount + boysCount + girlsCount;
 
     const validFromTime = valid_from ? new Date(valid_from) : reg.valid_from;
     const validUntilTime = valid_until ? new Date(valid_until) : reg.valid_until;
@@ -386,8 +392,10 @@ async function updateRegistration(req, res) {
            adult_men_count = $8,
            adult_women_count = $9,
            children_count = $10,
-           person_count = $11
-       WHERE id = $12`,
+           boys_count = $11,
+           girls_count = $12,
+           person_count = $13
+       WHERE id = $14`,
       [
         purpose,
         visit_type,
@@ -399,6 +407,8 @@ async function updateRegistration(req, res) {
         menCount,
         womenCount,
         kidsCount,
+        boysCount,
+        girlsCount,
         totalCount,
         id,
       ]
@@ -564,9 +574,58 @@ async function createPublicVisitorRegistration(req, res) {
   }
 }
 
+// 2b. Explicit Referrer Generate QR Code button
+async function generateRegistrationQr(req, res) {
+  const { registration_id } = req.body;
+  if (!registration_id) {
+    return res.status(400).json({ success: false, message: 'Registration ID required.' });
+  }
+
+  try {
+    const regRes = await db.query('SELECT * FROM registrations WHERE id = $1', [registration_id]);
+    if (regRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Registration not found.' });
+    }
+
+    const reg = regRes.rows[0];
+    if (reg.status !== 'APPROVED' && reg.status !== 'ADMIN_BYPASSED' && !reg.bypassed_by_admin) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot generate QR Code. Registration status is '${reg.status}'. Pass must be approved first.`,
+      });
+    }
+
+    let qrCodeUrl = reg.qr_code_url;
+    if (!qrCodeUrl) {
+      const qrData = JSON.stringify({ passCode: reg.pass_code, regId: reg.id, isVvip: reg.is_vvip });
+      qrCodeUrl = await QRCode.toDataURL(qrData);
+      await db.query('UPDATE registrations SET qr_code_url = $1 WHERE id = $2', [qrCodeUrl, reg.id]);
+    }
+
+    await db.query(
+      `INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, remarks) VALUES ($1, $2, $3, $4, $5)`,
+      [req.user.id, 'GENERATE_QR_CODE', 'REGISTRATION', reg.id, `Referrer ${req.user.name} generated QR Code for Pass ${reg.pass_code}`]
+    );
+
+    broadcastSyncEvent('QR_GENERATED', { registrationId: reg.id, passCode: reg.pass_code });
+
+    res.json({
+      success: true,
+      message: `QR Code and Passcode generated for ${reg.pass_code}! Share it with your guest.`,
+      pass_code: reg.pass_code,
+      qr_code_url: qrCodeUrl,
+      is_single_use: !reg.is_permanent_pass,
+    });
+  } catch (err) {
+    console.error('Error generating QR code:', err);
+    res.status(500).json({ success: false, message: 'Failed to generate QR code.' });
+  }
+}
+
 module.exports = {
   createRegistration,
   updateApproval,
+  generateRegistrationQr,
   getHostRegistrations,
   updateRegistration,
   isL2Enabled,

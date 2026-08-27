@@ -3,7 +3,17 @@ const router = express.Router();
 
 const db = require('../config/db');
 const { login, getMe, sendOtp, verifyOtp, registerNewUser } = require('../controllers/authController');
-const { createRegistration, updateApproval, getHostRegistrations, updateRegistration, isL2Enabled, getVisitHistory } = require('../controllers/visitorController');
+const { 
+  createRegistration, 
+  updateApproval, 
+  generateRegistrationQr,
+  getHostRegistrations, 
+  updateRegistration, 
+  isL2Enabled, 
+  getVisitHistory,
+  getPublicHostInfo,
+  createPublicVisitorRegistration
+} = require('../controllers/visitorController');
 const { verifyGatePass, processGateMovement, getVisitorsInsideCampus } = require('../controllers/gateController');
 const { checkExpiredRequests } = require('../controllers/expiryService');
 const { 
@@ -305,6 +315,9 @@ router.put('/registrations/:id', authenticateToken, updateRegistration);
  *         description: Approval status updated
  */
 router.post('/registrations/approve', authenticateToken, updateApproval);
+router.post('/registrations/generate-qr', authenticateToken, generateRegistrationQr);
+router.get('/registrations/public-host/:host_id', getPublicHostInfo);
+router.post('/registrations/public-visitor', createPublicVisitorRegistration);
 
 /**
  * @openapi
