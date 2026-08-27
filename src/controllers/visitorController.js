@@ -283,7 +283,15 @@ async function updateApproval(req, res) {
       [req.user.id, `APPROVAL_${action}`, 'REGISTRATION', registration_id, remarks || `Action ${action} by ${req.user.name}`]
     );
 
-    broadcastSyncEvent('REGISTRATION_UPDATED', { registrationId: registration_id, status: newStatus });
+    broadcastSyncEvent('REGISTRATION_UPDATED', {
+      registrationId: registration_id,
+      status: newStatus,
+      host_id: reg.host_id,
+      visitor_name: reg.visitor_name,
+      pass_code: reg.pass_code,
+      action: action,
+      timestamp: new Date()
+    });
 
     res.json({
       success: true,
@@ -713,7 +721,13 @@ async function createPublicVisitorRegistration(req, res) {
 
     await db.query('COMMIT');
 
-    broadcastSyncEvent('PUBLIC_VISITOR_SUBMITTED', { registration, host_id });
+    broadcastSyncEvent('PUBLIC_VISITOR_SUBMITTED', {
+      registration,
+      host_id: hostNumericId,
+      visitor_name: full_name,
+      pass_code: passCode,
+      timestamp: new Date()
+    });
 
     res.status(201).json({
       success: true,

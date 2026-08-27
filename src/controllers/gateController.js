@@ -174,6 +174,8 @@ async function processGateMovement(req, res) {
       direction,
       registration_id,
       visitor_name: reg.visitor_name,
+      pass_code: reg.pass_code,
+      host_id: reg.host_id,
       total_count: totalCount,
       adult_men_count: menCount,
       adult_women_count: womenCount,
