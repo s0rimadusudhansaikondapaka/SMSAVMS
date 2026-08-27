@@ -191,8 +191,88 @@ async function getVisitorsInsideCampus(req, res) {
   }
 }
 
+// 4. Get Gate Spot Registrations Queue (Submitted at Gate)
+async function getSpotRegistrationsQueue(req, res) {
+  try {
+    const result = await db.query(
+      `SELECT r.*, 
+              v.full_name as visitor_name, v.phone as visitor_phone, v.email as visitor_email, v.gender as visitor_gender,
+              v.photo_url, v.id_type, v.id_number, v.id_card_number, v.id_card_image_url, v.visitor_category,
+              u.name as host_name, u.phone as host_phone, u.department
+       FROM registrations r 
+       JOIN visitors v ON r.visitor_id = v.id 
+       LEFT JOIN users u ON r.host_id = u.id 
+       WHERE r.registration_type IN ('SPOT_REGISTRATION', 'SPOT_UNFAMILIAR') 
+         AND r.status IN ('PENDING_L1', 'PENDING_L2', 'REJECTED', 'APPROVED', 'INSIDE_CAMPUS')
+       ORDER BY r.created_at DESC LIMIT 50`
+    );
+    res.json({ success: true, count: result.rows.length, spot_requests: result.rows });
+  } catch (err) {
+    console.error('Error fetching spot registrations queue:', err);
+    res.status(500).json({ success: false, message: 'Failed to fetch spot registrations queue.' });
+  }
+}
+
+// 5. Guard Assigns Resident / Employee / PRO to Spot Registration
+async function assignHostToSpotRegistration(req, res) {
+  const { registration_id, host_id, remarks } = req.body;
+  if (!registration_id || !host_id) {
+    return res.status(400).json({ success: false, message: 'Registration ID and Host ID are required.' });
+  }
+
+  try {
+    await db.query('BEGIN');
+    
+    const hostRes = await db.query('SELECT name, department, role FROM users WHERE id = $1', [host_id]);
+    if (hostRes.rows.length === 0) {
+      await db.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Assigned Host/PRO not found.' });
+    }
+    const host = hostRes.rows[0];
+
+    const regRes = await db.query(
+      `UPDATE registrations 
+       SET host_id = $1, status = 'PENDING_L1' 
+       WHERE id = $2 
+       RETURNING *`,
+      [host_id, registration_id]
+    );
+
+    if (regRes.rows.length === 0) {
+      await db.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Spot registration not found.' });
+    }
+
+    await db.query(
+      `INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, remarks) VALUES ($1, $2, $3, $4, $5)`,
+      [req.user.id, 'ASSIGN_SPOT_HOST', 'REGISTRATION', registration_id, `Guard assigned host ${host.name} (${host.department}) to spot registration #${registration_id}. ${remarks || ''}`]
+    );
+
+    await db.query('COMMIT');
+
+    broadcastSyncEvent('SPOT_HOST_ASSIGNED', {
+      registration_id,
+      host_id,
+      host_name: host.name,
+      status: 'PENDING_L1',
+    });
+
+    res.json({
+      success: true,
+      message: `Assigned host ${host.name} to spot registration. Approval notification sent to host!`,
+      registration: regRes.rows[0],
+    });
+  } catch (err) {
+    await db.query('ROLLBACK');
+    console.error('Error assigning host to spot registration:', err);
+    res.status(500).json({ success: false, message: 'Failed to assign host to spot registration.' });
+  }
+}
+
 module.exports = {
   verifyGatePass,
   processGateMovement,
   getVisitorsInsideCampus,
+  getSpotRegistrationsQueue,
+  assignHostToSpotRegistration,
 };

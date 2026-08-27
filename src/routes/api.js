@@ -14,7 +14,13 @@ const {
   getPublicHostInfo,
   createPublicVisitorRegistration
 } = require('../controllers/visitorController');
-const { verifyGatePass, processGateMovement, getVisitorsInsideCampus } = require('../controllers/gateController');
+const { 
+  verifyGatePass, 
+  processGateMovement, 
+  getVisitorsInsideCampus,
+  getSpotRegistrationsQueue,
+  assignHostToSpotRegistration 
+} = require('../controllers/gateController');
 const { checkExpiredRequests } = require('../controllers/expiryService');
 const { 
   getOverstayAlerts, 
@@ -421,6 +427,8 @@ router.post('/gate/movement', authenticateToken, requireRoles('GUARD', 'SUPERVIS
  *         description: Active visitors inside campus
  */
 router.get('/gate/inside', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), getVisitorsInsideCampus);
+router.get('/gate/spot-queue', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), getSpotRegistrationsQueue);
+router.post('/gate/assign-host', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), assignHostToSpotRegistration);
 
 /**
  * @openapi
