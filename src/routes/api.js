@@ -22,7 +22,9 @@ const {
   processGateMovement, 
   getVisitorsInsideCampus,
   getSpotRegistrationsQueue,
-  assignHostToSpotRegistration 
+  assignHostToSpotRegistration,
+  getRecentGateLookups,
+  getGatewiseStatsAndSelfRegistered
 } = require('../controllers/gateController');
 const { checkExpiredRequests } = require('../controllers/expiryService');
 const { 
@@ -43,7 +45,9 @@ const {
   getGateCategoryRules,
   toggleGateCategoryRule,
   getL2MatrixRules,
-  updateL2MatrixRule
+  updateL2MatrixRule,
+  getAllPendingL2Approvals,
+  processL2ApprovalByAdmin
 } = require('../controllers/adminUserController');
 const { authenticateToken, requireRoles } = require('../middlewares/auth');
 
@@ -439,6 +443,8 @@ router.post('/gate/movement', authenticateToken, requireRoles('GUARD', 'SUPERVIS
 router.get('/gate/inside', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), getVisitorsInsideCampus);
 router.get('/gate/spot-queue', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), getSpotRegistrationsQueue);
 router.post('/gate/assign-host', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), assignHostToSpotRegistration);
+router.get('/gate/recent-lookups', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), getRecentGateLookups);
+router.get('/gate/gatewise-stats', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), getGatewiseStatsAndSelfRegistered);
 
 /**
  * @openapi
@@ -762,5 +768,9 @@ router.post('/admin/gate-rules/toggle', authenticateToken, requireRoles('ADMIN',
 // Customizable L2 Approval Matrix Routing Rules (Super Admin)
 router.get('/admin/l2-matrix-rules', authenticateToken, getL2MatrixRules);
 router.post('/admin/l2-matrix-rules/update', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD'), updateL2MatrixRule);
+
+// Super Admin Pending L2 Approvals Master & Direct Processing
+router.get('/admin/l2-pending-approvals', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD'), getAllPendingL2Approvals);
+router.post('/admin/process-l2-approval', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD'), processL2ApprovalByAdmin);
 
 module.exports = router;

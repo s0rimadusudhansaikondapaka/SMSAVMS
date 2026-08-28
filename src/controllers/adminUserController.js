@@ -387,6 +387,71 @@ async function updateL2MatrixRule(req, res) {
   }
 }
 
+// Get All Pending L2 Approvals for Super Admin
+async function getAllPendingL2Approvals(req, res) {
+  try {
+    const result = await db.query(
+      `SELECT r.*, 
+              v.full_name as visitor_name, v.phone as visitor_phone, v.visitor_category, v.photo_url,
+              u.name as host_name, u.role as host_role, u.department as host_department, u.address as host_address
+       FROM registrations r
+       JOIN visitors v ON r.visitor_id = v.id
+       LEFT JOIN users u ON r.host_id = u.id
+       WHERE r.status = 'PENDING_L2' OR r.status = 'PENDING_L1'
+       ORDER BY r.created_at DESC`
+    );
+    res.json({ success: true, pending_approvals: result.rows });
+  } catch (err) {
+    console.error('Error fetching pending L2 approvals:', err);
+    res.status(500).json({ success: false, message: 'Failed to fetch pending L2 approvals.' });
+  }
+}
+
+// Process L2 Approval or Rejection by Super Admin
+async function processL2ApprovalByAdmin(req, res) {
+  const { registration_id, action, remarks } = req.body;
+
+  if (!registration_id || !action || !['APPROVE', 'REJECT'].includes(action)) {
+    return res.status(400).json({ success: false, message: 'Registration ID and valid action (APPROVE or REJECT) required.' });
+  }
+
+  try {
+    const regRes = await db.query('SELECT * FROM registrations WHERE id = $1', [registration_id]);
+    if (regRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Registration pass not found.' });
+    }
+
+    const newStatus = action === 'APPROVE' ? 'APPROVED' : 'REJECTED';
+    const auditAction = action === 'APPROVE' ? 'SUPERADMIN_L2_APPROVED' : 'SUPERADMIN_L2_REJECTED';
+    const auditRemarks = remarks || `Super Admin ${req.user.name} (${req.user.role}) executed L2 ${action}`;
+
+    await db.query(
+      `UPDATE registrations 
+       SET status = $1, approved_by_name = $2, approved_by_role = $3, approval_timestamp = CURRENT_TIMESTAMP
+       WHERE id = $4`,
+      [newStatus, req.user.name, req.user.role, registration_id]
+    );
+
+    // Audit Logging
+    await db.query(
+      `INSERT INTO audit_logs (actor_id, actor_name, actor_role, action, entity_type, entity_id, status, remarks)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [req.user.id, req.user.name, req.user.role, auditAction, 'REGISTRATION', registration_id, 'SUCCESS', auditRemarks]
+    );
+
+    // Broadcast WebSocket Event
+    broadcastSyncEvent('REGISTRATION_UPDATED', { registration_id, status: newStatus, updated_by: req.user.name });
+
+    res.json({
+      success: true,
+      message: `Pass ${regRes.rows[0].pass_code} successfully ${newStatus} by Super Admin.`,
+    });
+  } catch (err) {
+    console.error('Error processing L2 approval by Admin:', err);
+    res.status(500).json({ success: false, message: 'Failed to process L2 approval.' });
+  }
+}
+
 module.exports = {
   getAllUsers,
   getDepartments,
@@ -397,4 +462,6 @@ module.exports = {
   toggleGateCategoryRule,
   getL2MatrixRules,
   updateL2MatrixRule,
+  getAllPendingL2Approvals,
+  processL2ApprovalByAdmin,
 };

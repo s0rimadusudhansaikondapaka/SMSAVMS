@@ -44,20 +44,21 @@ async function createRegistration(req, res) {
     const existingVisitor = await db.query('SELECT id FROM visitors WHERE phone = $1', [phone]);
     const idCardNo = id_card_number || id_number || '';
     const visitorGender = gender || 'Male';
+    const companyName = req.body.company_name || req.body.companyName || '';
 
     if (existingVisitor.rows.length > 0) {
       visitorId = existingVisitor.rows[0].id;
       await db.query(
         `UPDATE visitors 
-         SET full_name = $1, email = $2, gender = $3, photo_url = $4, id_type = $5, id_number = $6, id_card_number = $7, id_card_image_url = $8, visitor_category = $9
-         WHERE id = $10`,
-        [full_name, email || '', visitorGender, photo_url || '', id_type || 'Aadhaar', idCardNo, idCardNo, id_card_image_url || '', visitor_category || 'GENERAL', visitorId]
+         SET full_name = $1, email = $2, gender = $3, photo_url = $4, id_type = $5, id_number = $6, id_card_number = $7, id_card_image_url = $8, visitor_category = $9, company_name = $10
+         WHERE id = $11`,
+        [full_name, email || '', visitorGender, photo_url || '', id_type || 'Aadhaar', idCardNo, idCardNo, id_card_image_url || '', visitor_category || 'GENERAL', companyName, visitorId]
       );
     } else {
       const newVisitor = await db.query(
-        `INSERT INTO visitors (full_name, phone, email, gender, photo_url, id_type, id_number, id_card_number, id_card_image_url, visitor_category) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
-        [full_name, phone, email || '', visitorGender, photo_url || '', id_type || 'Aadhaar', idCardNo, idCardNo, id_card_image_url || '', visitor_category || 'GENERAL']
+        `INSERT INTO visitors (full_name, phone, email, gender, photo_url, id_type, id_number, id_card_number, id_card_image_url, visitor_category, company_name) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+        [full_name, phone, email || '', visitorGender, photo_url || '', id_type || 'Aadhaar', idCardNo, idCardNo, id_card_image_url || '', visitor_category || 'GENERAL', companyName]
       );
       visitorId = newVisitor.rows[0].id;
     }
@@ -116,8 +117,26 @@ async function createRegistration(req, res) {
       }
     }
 
-    // Generate unique Pass Code
-    const passCodePrefix = is_vvip ? 'VVIP' : 'PASS';
+    // Determine if pass is permanent (Maids, Devotees, Frequent Visitors, Caretakers, Daily Labours)
+    const isPermanent = is_permanent || visitor_category === 'MAID' || visitor_category === 'DEVOTEE' || visitor_category === 'FREQUENT_VISITOR' || visitor_category === 'CARETAKER';
+    if (isPermanent) {
+      initialStatus = 'APPROVED'; // Permanent passes registered by Referrer/SO are pre-approved
+      validUntilTime = new Date(validFromTime);
+      validUntilTime.setFullYear(validUntilTime.getFullYear() + 2); // Valid for 2 years (permanent)
+    }
+
+    // Generate unique category-aware Pass Code
+    const passCodePrefix = visitor_category === 'MAID' 
+      ? 'MAID-PERM' 
+      : (visitor_category === 'DEVOTEE' || visitor_category === 'FREQUENT_VISITOR') 
+      ? 'DEVOTEE-PERM' 
+      : visitor_category === 'DELIVERY'
+      ? 'DELIVERY'
+      : visitor_category === 'VENDOR' || visitor_category === 'CONTRACTOR'
+      ? 'VENDOR'
+      : is_vvip 
+      ? 'VVIP' 
+      : 'PASS';
     const randomNum = Math.floor(1000 + Math.random() * 9000);
     const passCode = `${passCodePrefix}-${randomNum}`;
 

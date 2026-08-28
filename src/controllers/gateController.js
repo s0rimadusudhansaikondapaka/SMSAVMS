@@ -37,7 +37,7 @@ async function verifyGatePass(req, res) {
     const result = await db.query(
       `SELECT r.*, 
               v.full_name as visitor_name, v.phone as visitor_phone, v.email as visitor_email, v.gender as visitor_gender,
-              v.photo_url, v.id_type, v.id_number, v.id_card_number, v.id_card_image_url, v.visitor_category, v.is_frequent_visitor, v.has_smartphone,
+              v.photo_url, v.id_type, v.id_number, v.id_card_number, v.id_card_image_url, v.visitor_category, v.company_name, v.is_frequent_visitor, v.has_smartphone,
               u.name as host_name, u.phone as host_phone,
               app_user.name as audit_approver_name, app_user.role as audit_approver_role
        FROM registrations r 
@@ -76,6 +76,18 @@ async function verifyGatePass(req, res) {
     );
     reg.vehicles = vehRes.rows;
 
+    // Fetch detailed Gate Movement Logs (Which guard allowed, members present, ID & address proof confirmation)
+    const logsRes = await db.query(
+      `SELECT gl.*, 
+              u.name as guard_name, u.role as guard_role
+       FROM gate_logs gl
+       LEFT JOIN users u ON gl.recorded_by_guard_id = u.id
+       WHERE gl.registration_id = $1
+       ORDER BY gl.id DESC`,
+      [reg.id]
+    );
+    reg.gate_movement_logs = logsRes.rows;
+
     // Gatewise Visitor Category Permission Check
     const visitorCategory = (reg.visitor_category || 'GENERAL').toUpperCase();
     const rulesRes = await db.query(
@@ -97,6 +109,32 @@ async function verifyGatePass(req, res) {
     // Privacy Masking: Mask host phone for standard guards
     const maskedHostPhone = reg.host_phone ? reg.host_phone.replace(/(\+\d{2}\s?\d{2})\d{4}(\d{4})/, '$1****$2') : '';
 
+    // 8-Hour Time Window Grace Period Calculation
+    const graceHours = await getGraceHoursWindow();
+    const now = new Date();
+    const validFrom = new Date(reg.valid_from);
+    const validUntil = new Date(reg.valid_until);
+
+    const earliestAllowedEntry = new Date(validFrom.getTime() - graceHours * 60 * 60 * 1000);
+    const latestAllowedEntry = new Date(validFrom.getTime() + graceHours * 60 * 60 * 1000);
+    const overstayThreshold = new Date(validUntil.getTime() + graceHours * 60 * 60 * 1000);
+
+    let arrivalStatus = 'VALID_FOR_ENTRY';
+    let arrivalMessage = `Pass valid for entry (Within ${graceHours}h arrival window)`;
+
+    if (now < earliestAllowedEntry) {
+      arrivalStatus = 'TOO_EARLY';
+      arrivalMessage = `⛔ Pass Arrival Window Not Open. Earliest entry: ${earliestAllowedEntry.toLocaleString()}`;
+    } else if (now > latestAllowedEntry && reg.status !== 'INSIDE_CAMPUS' && reg.status !== 'CHECKED_OUT') {
+      arrivalStatus = 'ARRIVAL_EXPIRED';
+      arrivalMessage = `⚠️ Pass Arrival Window Expired (Scheduled: ${validFrom.toLocaleString()})`;
+    }
+
+    let egressStatus = 'NORMAL_EXIT';
+    if (reg.status === 'INSIDE_CAMPUS' && now > overstayThreshold) {
+      egressStatus = 'OVERSTAY';
+    }
+
     res.json({
       success: true,
       pass: {
@@ -106,11 +144,28 @@ async function verifyGatePass(req, res) {
         restricted_gates: allGates.filter((g) => !allowedGates.includes(g)),
         is_current_gate_allowed: isCurrentGateAllowed,
         current_gate_checked: currentGate,
+        grace_hours: graceHours,
+        earliest_allowed_entry: earliestAllowedEntry.toISOString(),
+        latest_allowed_entry: latestAllowedEntry.toISOString(),
+        overstay_threshold: overstayThreshold.toISOString(),
+        arrival_status: arrivalStatus,
+        arrival_message: arrivalMessage,
+        egress_status: egressStatus,
       },
     });
   } catch (err) {
     console.error('Error verifying gate pass:', err);
     res.status(500).json({ success: false, message: 'Gate pass lookup failed.' });
+  }
+}
+
+// Helper to get time window grace hours setting (default 8 hours)
+async function getGraceHoursWindow() {
+  try {
+    const res = await db.query("SELECT value FROM system_settings WHERE key = 'PASS_TIME_WINDOW_GRACE_HOURS'");
+    return res.rows.length > 0 ? parseFloat(res.rows[0].value) || 8 : 8;
+  } catch (err) {
+    return 8;
   }
 }
 
@@ -148,45 +203,25 @@ async function processGateMovement(req, res) {
 
     const reg = regRes.rows[0];
 
-    if (!reg.is_vvip && !reg.bypassed_by_admin && direction === 'IN' && reg.status !== 'APPROVED') {
-      await db.query('ROLLBACK');
-      return res.status(400).json({ success: false, message: `Cannot process IN entry. Pass status is ${reg.status}` });
-    }
+    const graceHours = await getGraceHoursWindow();
+    const now = new Date();
+    const validFrom = new Date(reg.valid_from);
+    const validUntil = new Date(reg.valid_until);
+    const windowStart = new Date(validFrom.getTime() - graceHours * 60 * 60 * 1000);
+    const windowEnd = new Date(validUntil.getTime() + graceHours * 60 * 60 * 1000);
 
-    // Super Admin Gatewise Visitor Category Restriction Check
     if (direction === 'IN') {
-      const categoryCheck = await db.query(
-        `SELECT is_allowed FROM gate_category_rules WHERE gate_name = $1 AND visitor_category = $2`,
-        [gate_name, reg.visitor_category || 'GENERAL']
-      );
-      if (categoryCheck.rows.length > 0 && categoryCheck.rows[0].is_allowed === false) {
+      if (reg.status !== 'APPROVED' && reg.status !== 'CHECKED_OUT' && !reg.is_vvip && !reg.bypassed_by_admin) {
+        await db.query('ROLLBACK');
+        return res.status(400).json({ success: false, message: `Cannot process IN entry. Pass status is ${reg.status}` });
+      }
+
+      // Check if current time is within allowed entry to departure end window
+      if (!reg.is_permanent_pass && (now < windowStart || now > windowEnd)) {
         await db.query('ROLLBACK');
         return res.status(400).json({
           success: false,
-          message: `⛔ Entry Restricted at ${gate_name.replace('_', ' ')}: Visitor category '${reg.visitor_category || 'GENERAL'}' is DISABLED at this gate by Super Admin rules. Please direct visitor to an authorized gate.`
-        });
-      }
-    }
-
-    // Entry Window Validation: ±N hours from scheduled arrival (configurable via Super Admin)
-    if (direction === 'IN' && reg.valid_from && !reg.is_permanent_pass) {
-      let windowHours = 8;
-      try {
-        const settingRes = await db.query("SELECT value FROM system_settings WHERE key = 'ENTRY_WINDOW_HOURS'");
-        if (settingRes.rows.length > 0) windowHours = parseInt(settingRes.rows[0].value) || 8;
-      } catch (e) {
-        windowHours = 8;
-      }
-
-      const now = new Date();
-      const validFrom = new Date(reg.valid_from);
-      const windowStart = new Date(validFrom.getTime() - windowHours * 60 * 60 * 1000);
-      const windowEnd = new Date(validFrom.getTime() + windowHours * 60 * 60 * 1000);
-      if (now < windowStart || now > windowEnd) {
-        await db.query('ROLLBACK');
-        return res.status(400).json({
-          success: false,
-          message: `Entry not allowed. Visitor's acceptable entry window is ±${windowHours} hours from scheduled arrival time (${validFrom.toLocaleString()}). Allowed window: ${windowStart.toLocaleString()} to ${windowEnd.toLocaleString()}.`,
+          message: `Entry window expired. Re-entry allowed until departure window end (${windowEnd.toLocaleString()}).`,
         });
       }
     }
@@ -359,10 +394,92 @@ async function assignHostToSpotRegistration(req, res) {
   }
 }
 
+// Get Top 20 Recent Gate Lookups / Verified Passes
+async function getRecentGateLookups(req, res) {
+  try {
+    const result = await db.query(
+      `SELECT r.id, r.pass_code, r.status, r.visitor_category, r.created_at,
+              v.full_name as visitor_name, v.phone as visitor_phone, v.vehicle_no,
+              COALESCE(gl.timestamp, r.created_at) as last_activity
+       FROM registrations r
+       JOIN visitors v ON r.visitor_id = v.id
+       LEFT JOIN (
+         SELECT registration_id, MAX(timestamp) as timestamp 
+         FROM gate_logs 
+         GROUP BY registration_id
+       ) gl ON gl.registration_id = r.id
+       ORDER BY last_activity DESC
+       LIMIT 20`
+    );
+    res.json({ success: true, recent_passes: result.rows });
+  } catch (err) {
+    console.error('Error fetching recent gate lookups:', err);
+    res.status(500).json({ success: false, message: 'Failed to fetch recent lookups.' });
+  }
+}
+
+// Get Gatewise Movement Stats & Self-Registered Visitor List for Security Guards
+async function getGatewiseStatsAndSelfRegistered(req, res) {
+  const gateName = req.query.gateName || 'NORTH_GATE';
+  try {
+    // 1. Gatewise Movement Logs & Counts for active gate today
+    const statsRes = await db.query(
+      `SELECT 
+         COUNT(*) FILTER (WHERE direction = 'IN') as in_count,
+         COUNT(*) FILTER (WHERE direction = 'OUT') as out_count
+       FROM gate_logs
+       WHERE gate_name = $1 AND timestamp >= CURRENT_DATE`,
+      [gateName]
+    );
+
+    const logsRes = await db.query(
+      `SELECT gl.*, 
+              v.full_name as visitor_name, v.phone as visitor_phone,
+              u.name as guard_name, u.role as guard_role
+       FROM gate_logs gl
+       JOIN registrations r ON gl.registration_id = r.id
+       JOIN visitors v ON r.visitor_id = v.id
+       LEFT JOIN users u ON gl.recorded_by_guard_id = u.id
+       WHERE gl.gate_name = $1
+       ORDER BY gl.id DESC
+       LIMIT 100`,
+      [gateName]
+    );
+
+    // 2. Self-Registered / Spot Visitors List & Count
+    const selfRegRes = await db.query(
+      `SELECT r.id, r.pass_code, r.status, r.registration_type, r.is_spot_registration, r.created_at,
+              v.full_name as visitor_name, v.phone as visitor_phone, v.visitor_category,
+              u.name as host_name
+       FROM registrations r
+       JOIN visitors v ON r.visitor_id = v.id
+       LEFT JOIN users u ON r.host_id = u.id
+       WHERE (r.registration_type = 'SPOT_REGISTRATION' OR r.is_spot_registration = true)
+       ORDER BY r.id DESC
+       LIMIT 100`
+    );
+
+    res.json({
+      success: true,
+      gate_name: gateName,
+      gate_in_count: parseInt(statsRes.rows[0]?.in_count || 0),
+      gate_out_count: parseInt(statsRes.rows[0]?.out_count || 0),
+      gate_movement_list: logsRes.rows,
+      self_registered_count: selfRegRes.rows.length,
+      self_registered_list: selfRegRes.rows,
+    });
+  } catch (err) {
+    console.error('Error fetching gatewise stats:', err);
+    res.status(500).json({ success: false, message: 'Failed to fetch gatewise stats.' });
+  }
+}
+
 module.exports = {
   verifyGatePass,
   processGateMovement,
   getVisitorsInsideCampus,
   getSpotRegistrationsQueue,
   assignHostToSpotRegistration,
+  getRecentGateLookups,
+  getGatewiseStatsAndSelfRegistered,
 };
