@@ -1,6 +1,7 @@
 const QRCode = require('qrcode');
 const db = require('../config/db');
 const { broadcastSyncEvent } = require('../sockets/syncServer');
+const { sendVisitorApprovalEmail, sendHostL1NotificationEmail } = require('../services/emailService');
 
 // Helper to check L2 approval toggle status
 async function isL2Enabled() {
@@ -215,6 +216,35 @@ async function createRegistration(req, res) {
 
     await db.query('COMMIT');
 
+    // Trigger Email Notifications (Visitor Approval & Host Request)
+    if (initialStatus === 'APPROVED' && email) {
+      const hostName = registration.approved_by_name || 'Ashram Host';
+      sendVisitorApprovalEmail({
+        visitorEmail: email,
+        visitorName: full_name,
+        passCode,
+        validFrom: validFromTime,
+        validUntil: validUntilTime,
+        hostName,
+      });
+    } else if (initialStatus === 'PENDING_L1' && registration.host_id) {
+      db.query('SELECT name, email FROM users WHERE id = $1', [registration.host_id])
+        .then((hostRes) => {
+          if (hostRes.rows.length > 0 && hostRes.rows[0].email) {
+            sendHostL1NotificationEmail({
+              hostEmail: hostRes.rows[0].email,
+              hostName: hostRes.rows[0].name,
+              visitorName: full_name,
+              visitorPhone: phone,
+              purpose: purpose || 'General Visit',
+              passCode,
+              visitorCategory: visitor_category,
+            });
+          }
+        })
+        .catch((e) => console.error('Failed to fetch host email for L1 notification:', e));
+    }
+
     if (is_vvip) {
       broadcastSyncEvent('VVIP_ALERT', {
         message: `High Priority VVIP Registration Created: ${full_name}`,
@@ -383,6 +413,18 @@ async function updateApproval(req, res) {
       action: action,
       timestamp: new Date()
     });
+
+    // Send Visitor Email on Approval Completion
+    if (newStatus === 'APPROVED' && reg.visitor_email) {
+      sendVisitorApprovalEmail({
+        visitorEmail: reg.visitor_email,
+        visitorName: reg.visitor_name,
+        passCode: reg.pass_code,
+        validFrom: reg.valid_from,
+        validUntil: reg.valid_until,
+        hostName: req.user.name,
+      });
+    }
 
     res.json({
       success: true,

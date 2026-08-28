@@ -442,6 +442,27 @@ async function processL2ApprovalByAdmin(req, res) {
     // Broadcast WebSocket Event
     broadcastSyncEvent('REGISTRATION_UPDATED', { registration_id, status: newStatus, updated_by: req.user.name });
 
+    // Send Visitor Email on Approval Completion
+    if (newStatus === 'APPROVED') {
+      const visRes = await db.query(
+        `SELECT r.*, v.full_name as visitor_name, v.email as visitor_email 
+         FROM registrations r JOIN visitors v ON r.visitor_id = v.id WHERE r.id = $1`,
+        [registration_id]
+      );
+      if (visRes.rows.length > 0 && visRes.rows[0].visitor_email) {
+        const vis = visRes.rows[0];
+        const { sendVisitorApprovalEmail } = require('../services/emailService');
+        sendVisitorApprovalEmail({
+          visitorEmail: vis.visitor_email,
+          visitorName: vis.visitor_name,
+          passCode: vis.pass_code,
+          validFrom: vis.valid_from,
+          validUntil: vis.valid_until,
+          hostName: req.user.name,
+        });
+      }
+    }
+
     res.json({
       success: true,
       message: `Pass ${regRes.rows[0].pass_code} successfully ${newStatus} by Super Admin.`,
