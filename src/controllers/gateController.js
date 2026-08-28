@@ -1,5 +1,5 @@
 const db = require('../config/db');
-const { broadcastSyncEvent } = require('../services/syncServer');
+const { broadcastSyncEvent } = require('../sockets/syncServer');
 const { logSystemAction } = require('../services/auditLogger');
 
 // 1. Lookup Registration by Passcode, QR Code Hash, Phone Number, or Vehicle No
