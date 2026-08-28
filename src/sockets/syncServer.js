@@ -27,6 +27,12 @@ function initWebSocketServer(server) {
           return;
         }
 
+        if (data.type === 'SUBSCRIBE_PASS') {
+          ws.passCode = String(data.passCode || '');
+          console.log(`[WebSocket Sync] Subscribed Socket for Pass Code: ${ws.passCode}`);
+          return;
+        }
+
         if (data.type === 'PING') {
           ws.isAlive = true;
           ws.send(JSON.stringify({ type: 'PONG' }));

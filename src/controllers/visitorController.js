@@ -180,8 +180,13 @@ async function createRegistration(req, res) {
     if (initialStatus === 'APPROVED') {
       const qrData = JSON.stringify({ passCode, regId: registration.id, isVvip: is_vvip });
       const qrCodeUrl = await QRCode.toDataURL(qrData);
-      await db.query('UPDATE registrations SET qr_code_url = $1 WHERE id = $2', [qrCodeUrl, registration.id]);
+      await db.query(
+        'UPDATE registrations SET qr_code_url = $1, approved_by_user_id = $2, approved_by_name = $3, approved_by_role = $4 WHERE id = $5',
+        [qrCodeUrl, req.user?.id || null, req.user?.name || 'Referral Host', req.user?.role || 'RESIDENT', registration.id]
+      );
       registration.qr_code_url = qrCodeUrl;
+      registration.approved_by_name = req.user?.name || 'Referral Host';
+      registration.approved_by_role = req.user?.role || 'RESIDENT';
     }
 
     await db.query(
@@ -248,30 +253,56 @@ async function updateApproval(req, res) {
         
         let isHostResident = false;
         let isHostEmployee = false;
+        let hostDeptId = null;
         if (reg.host_id) {
-          const hostRes = await db.query('SELECT role, residency_status FROM users WHERE id = $1', [reg.host_id]);
+          const hostRes = await db.query('SELECT role, residency_status, department_id FROM users WHERE id = $1', [reg.host_id]);
           if (hostRes.rows.length > 0) {
             const h = hostRes.rows[0];
             isHostResident = h.role === 'RESIDENT' || h.residency_status === 'RESIDENT';
             isHostEmployee = h.role === 'EMPLOYEE' || h.role === 'HOD';
+            hostDeptId = h.department_id;
           }
         }
 
-        // L2 Matrix Evaluation:
-        // 1. Employee Host + Official/Office Visit -> Approver = Official HOD (role)
-        if ((isHostEmployee || vType === 'OFFICE') && (vType === 'OFFICE' || vType === 'OFFICIAL')) {
-          if (req.user.role !== 'HOD') {
-            newStatus = 'PENDING_L2';
-          } else {
-            newStatus = 'APPROVED';
-          }
+        // Determine host category key: 'BOTH', 'EMPLOYEE', or 'RESIDENT'
+        const hostCategoryKey = (isHostResident && isHostEmployee) ? 'BOTH' : isHostEmployee ? 'EMPLOYEE' : 'RESIDENT';
+        
+        // Determine visit type category key: 'EMPLOYEE_OFFICIAL_VISIT', 'RESIDENT_VISIT', or 'ASHRAM_VISIT'
+        let visitTypeCategoryKey = 'RESIDENT_VISIT';
+        if (vType === 'OFFICE' || vType === 'OFFICIAL') {
+          visitTypeCategoryKey = 'EMPLOYEE_OFFICIAL_VISIT';
+        } else if (vType === 'ASHRAM' || vType === 'BHAJAN' || vType === 'TOUR') {
+          visitTypeCategoryKey = 'ASHRAM_VISIT';
         }
-        // 2. Resident Host OR Ashram/Bhajan/Tour Visit -> Approver = PRO (department)
-        else if (isHostResident || vType === 'HOME' || vType === 'BHAJAN' || vType === 'TOUR' || vType === 'ASHRAM') {
-          if (req.user.role !== 'PRO') {
-            newStatus = 'PENDING_L2';
-          } else {
+
+        // Query active L2 Matrix rule configured by Super Admin
+        const ruleRes = await db.query(
+          `SELECT approver_type FROM l2_approval_matrix_rules WHERE host_category = $1 AND visit_type_category = $2 AND is_enabled = true`,
+          [hostCategoryKey, visitTypeCategoryKey]
+        );
+
+        let approverType = 'DEPARTMENT_PRO';
+        if (ruleRes.rows.length > 0) {
+          approverType = ruleRes.rows[0].approver_type;
+        } else {
+          // Fallback default matrix
+          approverType = (visitTypeCategoryKey === 'EMPLOYEE_OFFICIAL_VISIT') ? 'SAME_DEPARTMENT_HOD' : 'DEPARTMENT_PRO';
+        }
+
+        // Evaluate whether current approver satisfies rule
+        if (approverType === 'SAME_DEPARTMENT_HOD') {
+          // Requires HOD role of host's same department
+          if (req.user.role === 'HOD' && (hostDeptId ? req.user.department_id === hostDeptId : true)) {
             newStatus = 'APPROVED';
+          } else {
+            newStatus = 'PENDING_L2';
+          }
+        } else if (approverType === 'DEPARTMENT_PRO') {
+          // Requires PRO department
+          if (req.user.role === 'PRO' || req.user.department_name === 'PRO') {
+            newStatus = 'APPROVED';
+          } else {
+            newStatus = 'PENDING_L2';
           }
         } else {
           newStatus = 'APPROVED';
@@ -295,7 +326,10 @@ async function updateApproval(req, res) {
            priority = COALESCE($4, priority),
            visit_type = COALESCE($5, visit_type),
            valid_from = COALESCE($6, valid_from),
-           valid_until = COALESCE($7, valid_until)
+           valid_until = COALESCE($7, valid_until),
+           approved_by_user_id = CASE WHEN $1 = 'APPROVED' OR $1 LIKE 'PENDING%' THEN $9 ELSE approved_by_user_id END,
+           approved_by_name = CASE WHEN $1 = 'APPROVED' OR $1 LIKE 'PENDING%' THEN $10 ELSE approved_by_name END,
+           approved_by_role = CASE WHEN $1 = 'APPROVED' OR $1 LIKE 'PENDING%' THEN $11 ELSE approved_by_role END
        WHERE id = $8`,
       [
         newStatus, 
@@ -305,7 +339,10 @@ async function updateApproval(req, res) {
         visit_type || null,
         valid_from ? new Date(valid_from) : null,
         valid_until ? new Date(valid_until) : null,
-        registration_id
+        registration_id,
+        req.user.id,
+        req.user.name,
+        req.user.role
       ]
     );
 

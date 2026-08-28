@@ -1,5 +1,6 @@
 const db = require('../config/db');
-const { broadcastSyncEvent } = require('../sockets/syncServer');
+const { broadcastSyncEvent } = require('../services/syncServer');
+const { logSystemAction } = require('../services/auditLogger');
 
 // 1. Lookup Registration by Passcode, QR Code Hash, Phone Number, or Vehicle No
 async function verifyGatePass(req, res) {
@@ -37,10 +38,17 @@ async function verifyGatePass(req, res) {
       `SELECT r.*, 
               v.full_name as visitor_name, v.phone as visitor_phone, v.email as visitor_email, v.gender as visitor_gender,
               v.photo_url, v.id_type, v.id_number, v.id_card_number, v.id_card_image_url, v.visitor_category, v.is_frequent_visitor, v.has_smartphone,
-              u.name as host_name, u.phone as host_phone
+              u.name as host_name, u.phone as host_phone,
+              app_user.name as audit_approver_name, app_user.role as audit_approver_role
        FROM registrations r 
        JOIN visitors v ON r.visitor_id = v.id 
        LEFT JOIN users u ON r.host_id = u.id 
+       LEFT JOIN LATERAL (
+         SELECT actor_id FROM audit_logs 
+         WHERE entity_id = r.id AND (action LIKE '%APPROVE%' OR action LIKE '%CREATE%') 
+         ORDER BY id DESC LIMIT 1
+       ) app_log ON true
+       LEFT JOIN users app_user ON app_log.actor_id = app_user.id
        WHERE r.pass_code = $1 OR v.vehicle_no = $1 OR v.phone = $1 OR CAST(r.id AS TEXT) = $1
        ORDER BY r.created_at DESC LIMIT 1`,
       [cleanQuery]
@@ -51,6 +59,15 @@ async function verifyGatePass(req, res) {
     }
 
     const reg = result.rows[0];
+    reg.approved_by_display = reg.approved_by_name 
+      ? `${reg.approved_by_name} (${reg.approved_by_role || 'Approver'})` 
+      : reg.audit_approver_name 
+      ? `${reg.audit_approver_name} (${reg.audit_approver_role || 'Approver'})` 
+      : reg.bypassed_by_admin 
+      ? 'Super Admin (Direct Auto-Approve)' 
+      : reg.host_name 
+      ? `${reg.host_name} (Host Pre-Approval)` 
+      : 'System Approved';
 
     // Fetch multiple vehicles associated with this registration pass
     const vehRes = await db.query(
@@ -199,10 +216,13 @@ async function processGateMovement(req, res) {
       [newStatus, menCount, womenCount, kidsCount, boysCount, girlsCount, totalCount, registration_id]
     );
 
-    await db.query(
-      `INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, remarks) VALUES ($1, $2, $3, $4, $5)`,
-      [req.user.id, `GATE_${direction}`, 'REGISTRATION', registration_id, `Gate ${direction} at ${gate_name}. Men: ${menCount}, Women: ${womenCount}, Children: ${kidsCount} (Permanent Pass: ${reg.is_permanent_pass})`]
-    );
+    await logSystemAction(req, {
+      action: `GATE_${direction}`,
+      entity_type: 'REGISTRATION',
+      entity_id: registration_id,
+      status: 'SUCCESS',
+      remarks: `Gate ${direction} recorded at ${gate_name} for ${reg.visitor_name} (Pass: ${reg.pass_code}). Breakdown - Men: ${menCount}, Women: ${womenCount}, Children: ${kidsCount}`
+    });
 
     await db.query('COMMIT');
 

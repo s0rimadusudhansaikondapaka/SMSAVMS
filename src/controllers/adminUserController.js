@@ -1,6 +1,7 @@
 const bcrypt = require('bcryptjs');
 const db = require('../config/db');
 const QRCode = require('qrcode');
+const { broadcastSyncEvent } = require('../sockets/syncServer');
 
 // Get all users for admin management
 async function getAllUsers(req, res) {
@@ -327,6 +328,8 @@ async function toggleGateCategoryRule(req, res) {
       [req.user.id, 'UPDATE_GATE_CATEGORY_RULE', 'GATE_RULE', `Super Admin ${req.user.name} set category '${visitor_category}' at gate '${gate_name}' to ${is_allowed ? 'ALLOWED' : 'DISABLED'}`]
     );
 
+    broadcastSyncEvent('GATE_RULE_UPDATED', { gate_name, visitor_category, is_allowed, updated_by: req.user.name });
+
     res.json({
       success: true,
       message: `Category '${visitor_category}' at gate '${gate_name}' updated to ${is_allowed ? 'ALLOWED' : 'DISABLED'}.`,
@@ -334,6 +337,53 @@ async function toggleGateCategoryRule(req, res) {
   } catch (err) {
     console.error('Error updating gate category rule:', err);
     res.status(500).json({ success: false, message: 'Failed to update gate category rule.' });
+  }
+}
+
+// Get L2 Approval Matrix Rules (Super Admin)
+async function getL2MatrixRules(req, res) {
+  try {
+    const result = await db.query(
+      `SELECT * FROM l2_approval_matrix_rules ORDER BY host_category, visit_type_category`
+    );
+    res.json({ success: true, rules: result.rows });
+  } catch (err) {
+    console.error('Error fetching L2 matrix rules:', err);
+    res.status(500).json({ success: false, message: 'Failed to fetch L2 matrix rules.' });
+  }
+}
+
+// Update L2 Approval Matrix Rule (Super Admin)
+async function updateL2MatrixRule(req, res) {
+  const { host_category, visit_type_category, approver_type, is_enabled } = req.body;
+
+  if (!host_category || !visit_type_category || !approver_type) {
+    return res.status(400).json({ success: false, message: 'host_category, visit_type_category, and approver_type required.' });
+  }
+
+  try {
+    await db.query(
+      `INSERT INTO l2_approval_matrix_rules (host_category, visit_type_category, approver_type, is_enabled, updated_at)
+       VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+       ON CONFLICT (host_category, visit_type_category)
+       DO UPDATE SET approver_type = EXCLUDED.approver_type, is_enabled = EXCLUDED.is_enabled, updated_at = CURRENT_TIMESTAMP`,
+      [host_category, visit_type_category, approver_type, is_enabled !== undefined ? is_enabled : true]
+    );
+
+    await db.query(
+      `INSERT INTO audit_logs (actor_id, action, entity_type, remarks) VALUES ($1, $2, $3, $4)`,
+      [req.user.id, 'UPDATE_L2_MATRIX_RULE', 'L2_RULE', `Super Admin ${req.user.name} updated L2 rule for ${host_category} + ${visit_type_category} to ${approver_type}`]
+    );
+
+    broadcastSyncEvent('L2_RULE_UPDATED', { host_category, visit_type_category, approver_type, updated_by: req.user.name });
+
+    res.json({
+      success: true,
+      message: `L2 Approval Rule updated for ${host_category} (${visit_type_category}) to ${approver_type}.`,
+    });
+  } catch (err) {
+    console.error('Error updating L2 matrix rule:', err);
+    res.status(500).json({ success: false, message: 'Failed to update L2 matrix rule.' });
   }
 }
 
@@ -345,4 +395,6 @@ module.exports = {
   bulkUploadVisitors,
   getGateCategoryRules,
   toggleGateCategoryRule,
+  getL2MatrixRules,
+  updateL2MatrixRule,
 };

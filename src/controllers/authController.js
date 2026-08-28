@@ -13,6 +13,8 @@ function generateUserGuid(user) {
   return `${hash.substring(0,8)}-${hash.substring(8,12)}-4${hash.substring(13,16)}-a${hash.substring(17,20)}-${hash.substring(20,32)}`;
 }
 
+const { logSystemAction } = require('../services/auditLogger');
+
 async function login(req, res) {
   const { email, password } = req.body;
   if (!email || !password) {
@@ -29,6 +31,12 @@ async function login(req, res) {
     );
 
     if (result.rows.length === 0) {
+      await logSystemAction(req, {
+        action: 'USER_LOGIN_FAILED',
+        entity_type: 'USER',
+        status: 'FAILED',
+        remarks: `Failed login attempt for unknown email: ${email}`,
+      });
       return res.status(401).json({ success: false, message: 'Invalid credentials.' });
     }
 
@@ -43,6 +51,13 @@ async function login(req, res) {
     }
 
     if (!isMatch) {
+      await logSystemAction({ user }, {
+        action: 'USER_LOGIN_FAILED',
+        entity_type: 'USER',
+        entity_id: user.id,
+        status: 'FAILED',
+        remarks: `Incorrect password attempt for user ${user.name} (${user.email})`,
+      });
       return res.status(401).json({ success: false, message: 'Invalid credentials.' });
     }
 
@@ -59,7 +74,15 @@ async function login(req, res) {
       department_name: user.department_name,
     };
 
-    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '24h' });
+    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '12h' });
+
+    await logSystemAction({ user, headers: req.headers, socket: req.socket, ip: req.ip }, {
+      action: 'USER_LOGIN',
+      entity_type: 'USER',
+      entity_id: user.id,
+      status: 'SUCCESS',
+      remarks: `User ${user.name} (${user.role}) logged in successfully`,
+    });
 
     res.json({
       success: true,

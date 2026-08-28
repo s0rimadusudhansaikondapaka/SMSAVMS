@@ -53,7 +53,15 @@ async function getReportData(req, res) {
         queryText = `SELECT r.*, v.full_name as visitor_name, v.vehicle_no, u.name as host_name FROM registrations r JOIN visitors v ON r.visitor_id = v.id LEFT JOIN users u ON r.host_id = u.id WHERE r.is_vvip = true ORDER BY r.id DESC`;
         break;
       case 'EXCEPTION':
-        queryText = `SELECT * FROM audit_logs ORDER BY id DESC`;
+        queryText = `
+          SELECT al.*, 
+                 COALESCE(al.actor_name, u.name, 'System User') as actor_name, 
+                 COALESCE(al.actor_role, u.role, 'SYSTEM') as actor_role 
+          FROM audit_logs al 
+          LEFT JOIN users u ON al.actor_id = u.id 
+          ORDER BY al.id DESC 
+          LIMIT 500
+        `;
         break;
       default:
         queryText = `SELECT r.*, v.full_name as visitor_name FROM registrations r JOIN visitors v ON r.visitor_id = v.id ORDER BY r.id DESC`;

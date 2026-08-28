@@ -41,7 +41,9 @@ const {
   bulkUploadUsers, 
   bulkUploadVisitors,
   getGateCategoryRules,
-  toggleGateCategoryRule
+  toggleGateCategoryRule,
+  getL2MatrixRules,
+  updateL2MatrixRule
 } = require('../controllers/adminUserController');
 const { authenticateToken, requireRoles } = require('../middlewares/auth');
 
@@ -756,5 +758,9 @@ router.post('/admin/visitors/bulk-upload', authenticateToken, requireRoles('ADMI
 // Gatewise Visitor Category Access Matrix (Super Admin)
 router.get('/admin/gate-rules', authenticateToken, getGateCategoryRules);
 router.post('/admin/gate-rules/toggle', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD'), toggleGateCategoryRule);
+
+// Customizable L2 Approval Matrix Routing Rules (Super Admin)
+router.get('/admin/l2-matrix-rules', authenticateToken, getL2MatrixRules);
+router.post('/admin/l2-matrix-rules/update', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD'), updateL2MatrixRule);
 
 module.exports = router;
