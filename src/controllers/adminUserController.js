@@ -6,7 +6,7 @@ const QRCode = require('qrcode');
 async function getAllUsers(req, res) {
   try {
     const result = await db.query(
-      `SELECT u.id, u.name, u.email, u.phone, u.role, u.residency_status, u.registration_status, u.department_id, u.created_at, d.name as department_name
+      `SELECT u.id, u.name, u.email, u.phone, u.role, u.residency_status, u.registration_status, u.department_id, u.flat_info, COALESCE(u.flat_info, 'Ashram Campus') as address, u.created_at, d.name as department_name
        FROM users u
        LEFT JOIN departments d ON u.department_id = d.id
        ORDER BY u.id DESC`
@@ -31,7 +31,8 @@ async function getDepartments(req, res) {
 
 // Create single user by Admin (Wizard)
 async function createSingleUser(req, res) {
-  const { name, email, phone, role, residency_status, department_id, password } = req.body;
+  const { name, email, phone, role, residency_status, department_id, password, address, flat_info } = req.body;
+  const userAddress = address || flat_info || '';
 
   if (!name || !email || !phone || !role) {
     return res.status(400).json({ success: false, message: 'Name, email, phone, and role are required.' });
@@ -60,10 +61,10 @@ async function createSingleUser(req, res) {
     const hashedPassword = await bcrypt.hash(userPassword, 10);
 
     const result = await db.query(
-      `INSERT INTO users (name, email, phone, role, residency_status, department_id, password_hash, registration_status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACTIVE')
-       RETURNING id, name, email, phone, role, residency_status, department_id, registration_status, created_at`,
-      [name, email, phone, role, validResidency, department_id || null, hashedPassword]
+      `INSERT INTO users (name, email, phone, role, residency_status, department_id, password_hash, flat_info, registration_status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'ACTIVE')
+       RETURNING id, name, email, phone, role, residency_status, department_id, flat_info, registration_status, created_at`,
+      [name, email, phone, role, validResidency, department_id || null, hashedPassword, userAddress]
     );
 
     const newUser = result.rows[0];
@@ -282,10 +283,66 @@ async function bulkUploadVisitors(req, res) {
   });
 }
 
+// Get all gatewise visitor category rules
+async function getGateCategoryRules(req, res) {
+  try {
+    const result = await db.query(
+      `SELECT * FROM gate_category_rules ORDER BY gate_name, visitor_category`
+    );
+    res.json({ success: true, rules: result.rows });
+  } catch (err) {
+    console.error('Error fetching gate category rules:', err);
+    res.status(500).json({ success: false, message: 'Failed to fetch gate category rules.' });
+  }
+}
+
+// Update/toggle gatewise category rule (Super Admin)
+async function toggleGateCategoryRule(req, res) {
+  const { gate_name, visitor_category, is_allowed } = req.body;
+
+  if (!gate_name || !visitor_category || is_allowed === undefined) {
+    return res.status(400).json({ success: false, message: 'gate_name, visitor_category, and is_allowed are required.' });
+  }
+
+  try {
+    const existing = await db.query(
+      `SELECT id FROM gate_category_rules WHERE gate_name = $1 AND visitor_category = $2`,
+      [gate_name, visitor_category]
+    );
+
+    if (existing.rows.length > 0) {
+      await db.query(
+        `UPDATE gate_category_rules SET is_allowed = $1, updated_at = CURRENT_TIMESTAMP WHERE gate_name = $2 AND visitor_category = $3`,
+        [is_allowed, gate_name, visitor_category]
+      );
+    } else {
+      await db.query(
+        `INSERT INTO gate_category_rules (gate_name, visitor_category, is_allowed, updated_at) VALUES ($1, $2, $3, CURRENT_TIMESTAMP)`,
+        [gate_name, visitor_category, is_allowed]
+      );
+    }
+
+    await db.query(
+      `INSERT INTO audit_logs (actor_id, action, entity_type, remarks) VALUES ($1, $2, $3, $4)`,
+      [req.user.id, 'UPDATE_GATE_CATEGORY_RULE', 'GATE_RULE', `Super Admin ${req.user.name} set category '${visitor_category}' at gate '${gate_name}' to ${is_allowed ? 'ALLOWED' : 'DISABLED'}`]
+    );
+
+    res.json({
+      success: true,
+      message: `Category '${visitor_category}' at gate '${gate_name}' updated to ${is_allowed ? 'ALLOWED' : 'DISABLED'}.`,
+    });
+  } catch (err) {
+    console.error('Error updating gate category rule:', err);
+    res.status(500).json({ success: false, message: 'Failed to update gate category rule.' });
+  }
+}
+
 module.exports = {
   getAllUsers,
   getDepartments,
   createSingleUser,
   bulkUploadUsers,
   bulkUploadVisitors,
+  getGateCategoryRules,
+  toggleGateCategoryRule,
 };

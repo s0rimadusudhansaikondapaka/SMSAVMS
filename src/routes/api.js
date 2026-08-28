@@ -39,7 +39,9 @@ const {
   getDepartments, 
   createSingleUser, 
   bulkUploadUsers, 
-  bulkUploadVisitors 
+  bulkUploadVisitors,
+  getGateCategoryRules,
+  toggleGateCategoryRule
 } = require('../controllers/adminUserController');
 const { authenticateToken, requireRoles } = require('../middlewares/auth');
 
@@ -750,5 +752,9 @@ router.get('/admin/users', authenticateToken, requireRoles('ADMIN', 'SECURITY_HE
 router.post('/admin/users', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD'), createSingleUser);
 router.post('/admin/users/bulk-upload', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD'), bulkUploadUsers);
 router.post('/admin/visitors/bulk-upload', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD', 'SUPERVISOR', 'HOD', 'GUARD'), bulkUploadVisitors);
+
+// Gatewise Visitor Category Access Matrix (Super Admin)
+router.get('/admin/gate-rules', authenticateToken, getGateCategoryRules);
+router.post('/admin/gate-rules/toggle', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD'), toggleGateCategoryRule);
 
 module.exports = router;

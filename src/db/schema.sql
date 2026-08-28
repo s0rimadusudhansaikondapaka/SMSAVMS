@@ -180,7 +180,7 @@ CREATE TABLE feedback (
 );
 
 -- 12. Single-Use Invite Tokens Table
-CREATE TABLE invite_tokens (
+CREATE TABLE IF NOT EXISTS invite_tokens (
     id SERIAL PRIMARY KEY,
     token VARCHAR(100) UNIQUE NOT NULL,
     host_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -188,4 +188,14 @@ CREATE TABLE invite_tokens (
     used_at TIMESTAMP,
     registration_id INT REFERENCES registrations(id) ON DELETE SET NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 13. Gatewise Visitor Category Control Table
+CREATE TABLE IF NOT EXISTS gate_category_rules (
+    id SERIAL PRIMARY KEY,
+    gate_name VARCHAR(50) NOT NULL,
+    visitor_category VARCHAR(50) NOT NULL,
+    is_allowed BOOLEAN DEFAULT TRUE,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(gate_name, visitor_category)
 );

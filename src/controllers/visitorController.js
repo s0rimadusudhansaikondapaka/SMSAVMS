@@ -237,10 +237,45 @@ async function updateApproval(req, res) {
     if (action === 'REJECT') {
       newStatus = 'REJECTED';
     } else if (action === 'APPROVE') {
-      if (reg.stay_required && !reg.accommodation_approved) {
+      if (reg.bypassed_by_admin || req.user.role === 'ADMIN') {
+        // Super Admin bypass: Directly APPROVED
+        newStatus = 'APPROVED';
+      } else if (reg.stay_required && !reg.accommodation_approved && req.user.role !== 'ACCOMMODATION_HOD') {
+        // Stay Required: Routed to Accommodation Team (department)
         newStatus = 'PENDING_ACCOMMODATION';
-      } else if (l2Enabled && (visit_type || reg.visit_type) === 'OFFICE' && req.user.role !== 'HOD') {
-        newStatus = 'PENDING_L2';
+      } else if (l2Enabled) {
+        const vType = (visit_type || reg.visit_type || 'HOME').toUpperCase();
+        
+        let isHostResident = false;
+        let isHostEmployee = false;
+        if (reg.host_id) {
+          const hostRes = await db.query('SELECT role, residency_status FROM users WHERE id = $1', [reg.host_id]);
+          if (hostRes.rows.length > 0) {
+            const h = hostRes.rows[0];
+            isHostResident = h.role === 'RESIDENT' || h.residency_status === 'RESIDENT';
+            isHostEmployee = h.role === 'EMPLOYEE' || h.role === 'HOD';
+          }
+        }
+
+        // L2 Matrix Evaluation:
+        // 1. Employee Host + Official/Office Visit -> Approver = Official HOD (role)
+        if ((isHostEmployee || vType === 'OFFICE') && (vType === 'OFFICE' || vType === 'OFFICIAL')) {
+          if (req.user.role !== 'HOD') {
+            newStatus = 'PENDING_L2';
+          } else {
+            newStatus = 'APPROVED';
+          }
+        }
+        // 2. Resident Host OR Ashram/Bhajan/Tour Visit -> Approver = PRO (department)
+        else if (isHostResident || vType === 'HOME' || vType === 'BHAJAN' || vType === 'TOUR' || vType === 'ASHRAM') {
+          if (req.user.role !== 'PRO') {
+            newStatus = 'PENDING_L2';
+          } else {
+            newStatus = 'APPROVED';
+          }
+        } else {
+          newStatus = 'APPROVED';
+        }
       } else {
         newStatus = 'APPROVED';
       }
@@ -484,7 +519,7 @@ async function updateRegistration(req, res) {
   }
 }
 
-// 5. Get Visit History (completed, expired, checked-out visits)
+// 5. Get Visit History (All allowed/approved, inside, checked-out, and processed visits)
 async function getVisitHistory(req, res) {
   try {
     const result = await db.query(
@@ -508,9 +543,8 @@ async function getVisitHistory(req, res) {
          ORDER BY timestamp DESC LIMIT 1
        ) gl_out ON true
        WHERE (r.host_id = $1 OR $2 IN ('HOD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'))
-       AND r.status IN ('CHECKED_OUT', 'EXPIRED', 'NOT_ARRIVED', 'REJECTED')
        ORDER BY r.created_at DESC
-       LIMIT 100`,
+       LIMIT 200`,
       [req.user.id, req.user.role]
     );
     res.json({ success: true, history: result.rows });

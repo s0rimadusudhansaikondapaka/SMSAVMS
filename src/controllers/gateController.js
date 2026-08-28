@@ -59,6 +59,24 @@ async function verifyGatePass(req, res) {
     );
     reg.vehicles = vehRes.rows;
 
+    // Gatewise Visitor Category Permission Check
+    const visitorCategory = (reg.visitor_category || 'GENERAL').toUpperCase();
+    const rulesRes = await db.query(
+      `SELECT gate_name, is_allowed FROM gate_category_rules WHERE visitor_category = $1`,
+      [visitorCategory]
+    );
+
+    const allGates = ['NORTH_GATE', 'SOUTH_GATE', 'EAST_GATE', 'WEST_GATE', 'STAFF_GATE'];
+    let allowedGates = [];
+    if (rulesRes.rows.length === 0) {
+      allowedGates = [...allGates];
+    } else {
+      allowedGates = rulesRes.rows.filter((r) => r.is_allowed).map((r) => r.gate_name);
+    }
+
+    const currentGate = (req.query.gateName || 'NORTH_GATE').toUpperCase();
+    const isCurrentGateAllowed = allowedGates.includes(currentGate);
+
     // Privacy Masking: Mask host phone for standard guards
     const maskedHostPhone = reg.host_phone ? reg.host_phone.replace(/(\+\d{2}\s?\d{2})\d{4}(\d{4})/, '$1****$2') : '';
 
@@ -67,6 +85,10 @@ async function verifyGatePass(req, res) {
       pass: {
         ...reg,
         host_phone_masked: maskedHostPhone,
+        allowed_gates: allowedGates,
+        restricted_gates: allGates.filter((g) => !allowedGates.includes(g)),
+        is_current_gate_allowed: isCurrentGateAllowed,
+        current_gate_checked: currentGate,
       },
     });
   } catch (err) {
@@ -112,6 +134,21 @@ async function processGateMovement(req, res) {
     if (!reg.is_vvip && !reg.bypassed_by_admin && direction === 'IN' && reg.status !== 'APPROVED') {
       await db.query('ROLLBACK');
       return res.status(400).json({ success: false, message: `Cannot process IN entry. Pass status is ${reg.status}` });
+    }
+
+    // Super Admin Gatewise Visitor Category Restriction Check
+    if (direction === 'IN') {
+      const categoryCheck = await db.query(
+        `SELECT is_allowed FROM gate_category_rules WHERE gate_name = $1 AND visitor_category = $2`,
+        [gate_name, reg.visitor_category || 'GENERAL']
+      );
+      if (categoryCheck.rows.length > 0 && categoryCheck.rows[0].is_allowed === false) {
+        await db.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `⛔ Entry Restricted at ${gate_name.replace('_', ' ')}: Visitor category '${reg.visitor_category || 'GENERAL'}' is DISABLED at this gate by Super Admin rules. Please direct visitor to an authorized gate.`
+        });
+      }
     }
 
     // Entry Window Validation: ±N hours from scheduled arrival (configurable via Super Admin)
@@ -246,7 +283,7 @@ async function assignHostToSpotRegistration(req, res) {
   try {
     await db.query('BEGIN');
     
-    const hostRes = await db.query('SELECT name, department, role FROM users WHERE id = $1', [host_id]);
+    const hostRes = await db.query('SELECT name, flat_info, role FROM users WHERE id = $1', [host_id]);
     if (hostRes.rows.length === 0) {
       await db.query('ROLLBACK');
       return res.status(404).json({ success: false, message: 'Assigned Host/PRO not found.' });
@@ -266,9 +303,15 @@ async function assignHostToSpotRegistration(req, res) {
       return res.status(404).json({ success: false, message: 'Spot registration not found.' });
     }
 
+    const reg = regRes.rows[0];
+
+    // Fetch visitor details
+    const vRes = await db.query('SELECT full_name FROM visitors WHERE id = $1', [reg.visitor_id]);
+    const visitorName = vRes.rows.length > 0 ? vRes.rows[0].full_name : 'Visitor';
+
     await db.query(
       `INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, remarks) VALUES ($1, $2, $3, $4, $5)`,
-      [req.user.id, 'ASSIGN_SPOT_HOST', 'REGISTRATION', registration_id, `Guard assigned host ${host.name} (${host.department}) to spot registration #${registration_id}. ${remarks || ''}`]
+      [req.user.id, 'ASSIGN_SPOT_HOST', 'REGISTRATION', registration_id, `Guard assigned host ${host.name} to spot registration #${registration_id}. ${remarks || ''}`]
     );
 
     await db.query('COMMIT');
@@ -277,13 +320,17 @@ async function assignHostToSpotRegistration(req, res) {
       registration_id,
       host_id,
       host_name: host.name,
+      visitor_name: visitorName,
+      pass_code: reg.pass_code,
       status: 'PENDING_L1',
+      assigned_by_guard: req.user.name,
+      timestamp: new Date(),
     });
 
     res.json({
       success: true,
-      message: `Assigned host ${host.name} to spot registration. Approval notification sent to host!`,
-      registration: regRes.rows[0],
+      message: `Assigned ${host.name} (${host.role === 'PRO' ? 'PRO' : 'Host'}) to spot registration. Approval notification sent!`,
+      registration: reg,
     });
   } catch (err) {
     await db.query('ROLLBACK');
