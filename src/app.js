@@ -69,6 +69,24 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Serve Frontend Static Production Build & SPA Fallback (URL Rewrite Fix)
+const path = require('path');
+const fs = require('fs');
+const frontendDistPath = path.join(__dirname, '../../frontend/VMS/dist');
+
+if (fs.existsSync(frontendDistPath)) {
+  console.log(`[Express Static] Serving frontend dist files from ${frontendDistPath}`);
+  app.use(express.static(frontendDistPath));
+
+  // SPA Wildcard Route Fallback: Rewrite client-side routes (/login, /admin, /guard-terminal, etc.) to index.html
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/api-docs') || req.path === '/health') {
+      return next();
+    }
+    res.sendFile(path.join(frontendDistPath, 'index.html'));
+  });
+}
+
 const server = http.createServer(app);
 
 // Initialize WebSocket Central Sync Server
