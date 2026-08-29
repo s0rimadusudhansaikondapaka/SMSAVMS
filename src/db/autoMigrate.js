@@ -84,6 +84,16 @@ async function runAutoMigrations() {
       );
     `);
 
+    // 8. Gate Direction Config Table (IN/OUT states configurable by Super Admin)
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS gate_direction_config (
+        gate_name VARCHAR(100),
+        direction_mode VARCHAR(50),
+        is_active BOOLEAN,
+        updated_at TIMESTAMP
+      );
+    `);
+
     // Seed default L2 matrix rules
     const defaultL2Rules = [
       ['RESIDENT', 'RESIDENT_VISIT', 'DEPARTMENT_PRO'],
@@ -106,6 +116,30 @@ async function runAutoMigrations() {
             INSERT INTO l2_approval_matrix_rules (host_category, visit_type_category, approver_type, is_enabled)
             VALUES ($1, $2, $3, true);
           `, [hostCat, visitCat, approver]);
+        }
+      } catch (e) {}
+    }
+
+    // Seed default gate direction states
+    const defaultGateDirections = [
+      ['NORTH_GATE', 'BOTH'],
+      ['SOUTH_GATE', 'BOTH'],
+      ['EAST_GATE', 'BOTH'],
+      ['WEST_GATE', 'BOTH'],
+      ['STAFF_GATE', 'BOTH'],
+    ];
+
+    for (const [gateName, mode] of defaultGateDirections) {
+      try {
+        const existing = await db.query(
+          `SELECT gate_name FROM gate_direction_config WHERE gate_name = $1`,
+          [gateName]
+        );
+        if (existing.rows.length === 0) {
+          await db.query(`
+            INSERT INTO gate_direction_config (gate_name, direction_mode, is_active)
+            VALUES ($1, $2, true);
+          `, [gateName, mode]);
         }
       } catch (e) {}
     }

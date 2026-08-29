@@ -41,6 +41,7 @@ const {
   getAllUsers, 
   getDepartments, 
   createSingleUser, 
+  updateSingleUser,
   bulkUploadUsers, 
   bulkUploadVisitors,
   getGateCategoryRules,
@@ -48,7 +49,9 @@ const {
   getL2MatrixRules,
   updateL2MatrixRule,
   getAllPendingL2Approvals,
-  processL2ApprovalByAdmin
+  processL2ApprovalByAdmin,
+  getGateDirectionConfig,
+  updateGateDirectionConfig,
 } = require('../controllers/adminUserController');
 const { authenticateToken, requireRoles } = require('../middlewares/auth');
 
@@ -758,14 +761,19 @@ router.put('/admin/approvers-config/:id', authenticateToken, requireRoles('ADMIN
 
 // Admin User & Bulk Upload Endpoints
 router.get('/departments', getDepartments);
-router.get('/admin/users', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD', 'SUPERVISOR'), getAllUsers);
+router.get('/admin/users', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD', 'SUPERVISOR', 'GUARD', 'PRO', 'HOD'), getAllUsers);
 router.post('/admin/users', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD'), createSingleUser);
+router.put('/admin/users/:id', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD'), updateSingleUser);
 router.post('/admin/users/bulk-upload', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD'), bulkUploadUsers);
 router.post('/admin/visitors/bulk-upload', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD', 'SUPERVISOR', 'HOD', 'GUARD'), bulkUploadVisitors);
 
 // Gatewise Visitor Category Access Matrix (Super Admin)
 router.get('/admin/gate-rules', authenticateToken, getGateCategoryRules);
 router.post('/admin/gate-rules/toggle', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD'), toggleGateCategoryRule);
+
+// Gate In/Out Direction State Configurations (Super Admin)
+router.get('/admin/gate-direction-config', authenticateToken, getGateDirectionConfig);
+router.post('/admin/gate-direction-config/update', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD'), updateGateDirectionConfig);
 
 // Customizable L2 Approval Matrix Routing Rules (Super Admin)
 router.get('/admin/l2-matrix-rules', authenticateToken, getL2MatrixRules);

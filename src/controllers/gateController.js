@@ -9,17 +9,20 @@ async function verifyGatePass(req, res) {
     return res.status(400).json({ success: false, message: 'Search parameter required.' });
   }
 
-  let cleanQuery = query.trim();
+  let cleanQuery = query.trim().replace(/^["']|["']$/g, '');
 
   // Parse scanned QR content if JSON payload e.g. {"passCode":"PASS-1001", ...}
-  if (cleanQuery.startsWith('{') && cleanQuery.endsWith('}')) {
-    try {
-      const parsed = JSON.parse(cleanQuery);
-      if (parsed.passCode || parsed.pass_code) {
-        cleanQuery = (parsed.passCode || parsed.pass_code).trim();
+  if (cleanQuery.includes('passCode') || cleanQuery.includes('pass_code')) {
+    const jsonMatch = cleanQuery.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      try {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (parsed.passCode || parsed.pass_code) {
+          cleanQuery = String(parsed.passCode || parsed.pass_code).trim();
+        }
+      } catch (e) {
+        // Ignore JSON parse error and proceed
       }
-    } catch (e) {
-      // Ignore JSON parse error and proceed with raw string
     }
   }
 
@@ -51,7 +54,7 @@ async function verifyGatePass(req, res) {
          ORDER BY id DESC LIMIT 1
        ) app_log ON true
        LEFT JOIN users app_user ON app_log.actor_id = app_user.id
-       WHERE r.pass_code = $1 OR v.vehicle_no = $1 OR v.phone = $1 OR CAST(r.id AS TEXT) = $1
+       WHERE LOWER(r.pass_code) = LOWER($1) OR LOWER(v.vehicle_no) = LOWER($1) OR v.phone = $1 OR CAST(r.id AS TEXT) = $1
        ORDER BY r.created_at DESC LIMIT 1`,
       [cleanQuery]
     );
@@ -188,6 +191,23 @@ async function processGateMovement(req, res) {
   }
 
   try {
+    // Enforce Super Admin Configured Gate Direction Mode (BOTH, IN_ONLY, OUT_ONLY, CLOSED)
+    const dirRes = await db.query(
+      `SELECT direction_mode FROM gate_direction_config WHERE gate_name = $1 AND is_active = true`,
+      [gate_name]
+    );
+    const dirMode = dirRes.rows.length > 0 ? dirRes.rows[0].direction_mode : 'BOTH';
+
+    if (dirMode === 'CLOSED') {
+      return res.status(403).json({ success: false, message: `Gate '${gate_name}' is currently CLOSED by Super Admin.` });
+    }
+    if (dirMode === 'IN_ONLY' && direction === 'OUT') {
+      return res.status(403).json({ success: false, message: `Gate '${gate_name}' is configured for INGRESS ONLY (Entry). Outbound movement is disabled.` });
+    }
+    if (dirMode === 'OUT_ONLY' && direction === 'IN') {
+      return res.status(403).json({ success: false, message: `Gate '${gate_name}' is configured for EGRESS ONLY (Exit). Inbound movement is disabled.` });
+    }
+
     await db.query('BEGIN');
 
     const regRes = await db.query(
@@ -315,10 +335,11 @@ async function getSpotRegistrationsQueue(req, res) {
       `SELECT r.*, 
               v.full_name as visitor_name, v.phone as visitor_phone, v.email as visitor_email, v.gender as visitor_gender,
               v.photo_url, v.id_type, v.id_number, v.id_card_number, v.id_card_image_url, v.visitor_category,
-              u.name as host_name, u.phone as host_phone, u.department
+              u.name as host_name, u.phone as host_phone, d.name as department
        FROM registrations r 
        JOIN visitors v ON r.visitor_id = v.id 
        LEFT JOIN users u ON r.host_id = u.id 
+       LEFT JOIN departments d ON u.department_id = d.id
        WHERE r.registration_type IN ('SPOT_REGISTRATION', 'SPOT_UNFAMILIAR') 
          AND r.status IN ('PENDING_L1', 'PENDING_L2', 'REJECTED', 'APPROVED', 'INSIDE_CAMPUS')
        ORDER BY r.created_at DESC LIMIT 50`
@@ -400,7 +421,7 @@ async function assignHostToSpotRegistration(req, res) {
 async function getRecentGateLookups(req, res) {
   try {
     const result = await db.query(
-      `SELECT r.id, r.pass_code, r.status, r.visitor_category, r.created_at,
+      `SELECT r.id, r.pass_code, r.status, v.visitor_category, r.created_at,
               v.full_name as visitor_name, v.phone as visitor_phone, v.vehicle_no,
               COALESCE(gl.timestamp, r.created_at) as last_activity
        FROM registrations r
@@ -450,13 +471,13 @@ async function getGatewiseStatsAndSelfRegistered(req, res) {
 
     // 2. Self-Registered / Spot Visitors List & Count
     const selfRegRes = await db.query(
-      `SELECT r.id, r.pass_code, r.status, r.registration_type, r.is_spot_registration, r.created_at,
+      `SELECT r.id, r.pass_code, r.status, r.registration_type, r.created_at,
               v.full_name as visitor_name, v.phone as visitor_phone, v.visitor_category,
               u.name as host_name
        FROM registrations r
        JOIN visitors v ON r.visitor_id = v.id
        LEFT JOIN users u ON r.host_id = u.id
-       WHERE (r.registration_type = 'SPOT_REGISTRATION' OR r.is_spot_registration = true)
+       WHERE r.registration_type = 'SPOT_REGISTRATION'
        ORDER BY r.id DESC
        LIMIT 100`
     );

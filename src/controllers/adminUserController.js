@@ -474,9 +474,144 @@ async function processL2ApprovalByAdmin(req, res) {
       success: true,
       message: `Pass ${regRes.rows[0].pass_code} successfully ${newStatus} by Super Admin.`,
     });
+// Get all gate direction / In-Out state configurations (Super Admin & Gate Terminal)
+async function getGateDirectionConfig(req, res) {
+  try {
+    const result = await db.query(`SELECT * FROM gate_direction_config ORDER BY gate_name`);
+    res.json({ success: true, configs: result.rows });
   } catch (err) {
-    console.error('Error processing L2 approval by Admin:', err);
-    res.status(500).json({ success: false, message: 'Failed to process L2 approval.' });
+    console.error('Error fetching gate direction configs:', err);
+    res.status(500).json({ success: false, message: 'Failed to fetch gate direction configs.' });
+  }
+}
+
+// Update gate direction / In-Out state mode (Super Admin)
+async function updateGateDirectionConfig(req, res) {
+  const { gate_name, direction_mode } = req.body;
+  if (!gate_name || !direction_mode) {
+    return res.status(400).json({ success: false, message: 'gate_name and direction_mode are required.' });
+  }
+
+  const validModes = ['BOTH', 'IN_ONLY', 'OUT_ONLY', 'CLOSED'];
+  if (!validModes.includes(direction_mode)) {
+    return res.status(400).json({ success: false, message: 'Invalid direction_mode. Must be BOTH, IN_ONLY, OUT_ONLY, or CLOSED.' });
+  }
+
+  try {
+    const existing = await db.query(`SELECT gate_name FROM gate_direction_config WHERE gate_name = $1`, [gate_name]);
+    if (existing.rows.length > 0) {
+      await db.query(
+        `UPDATE gate_direction_config SET direction_mode = $1, updated_at = CURRENT_TIMESTAMP WHERE gate_name = $2`,
+        [direction_mode, gate_name]
+      );
+    } else {
+      await db.query(
+        `INSERT INTO gate_direction_config (gate_name, direction_mode, is_active, updated_at) VALUES ($1, $2, true, CURRENT_TIMESTAMP)`,
+        [gate_name, direction_mode]
+      );
+    }
+
+    await db.query(
+      `INSERT INTO audit_logs (actor_id, action, entity_type, remarks) VALUES ($1, $2, $3, $4)`,
+      [req.user.id, 'UPDATE_GATE_DIRECTION_CONFIG', 'GATE_RULE', `Super Admin ${req.user.name} set gate '${gate_name}' direction state mode to '${direction_mode}'`]
+    );
+
+    broadcastSyncEvent('GATE_DIRECTION_CONFIG_UPDATED', {
+      gate_name,
+      direction_mode,
+      updated_by: req.user.name,
+      timestamp: new Date()
+    });
+
+    res.json({ success: true, message: `Gate ${gate_name} state updated to ${direction_mode}` });
+  } catch (err) {
+    console.error('Error updating gate direction config:', err);
+    res.status(500).json({ success: false, message: 'Failed to update gate direction config.' });
+// Update User Details & Registration Status (Super Admin)
+async function updateSingleUser(req, res) {
+  const { id } = req.params;
+  const {
+    name,
+    email,
+    phone,
+    role,
+    residency_status,
+    registration_status,
+    flat_info,
+    department_id,
+  } = req.body;
+
+  if (!id) {
+    return res.status(400).json({ success: false, message: 'User ID is required.' });
+  }
+
+  try {
+    const existingRes = await db.query('SELECT * FROM users WHERE id = $1', [id]);
+    if (existingRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'User not found.' });
+    }
+
+    const existingUser = existingRes.rows[0];
+
+    const updatedName = name || existingUser.name;
+    const updatedEmail = email || existingUser.email;
+    const updatedPhone = phone || existingUser.phone;
+    const updatedRole = role || existingUser.role;
+    const updatedResidency = residency_status || existingUser.residency_status;
+    const updatedStatus = registration_status || existingUser.registration_status || 'ACTIVE';
+    const updatedFlatInfo = flat_info !== undefined ? flat_info : existingUser.flat_info;
+    const updatedDeptId = department_id !== undefined ? (department_id ? parseInt(department_id) : null) : existingUser.department_id;
+
+    await db.query(
+      `UPDATE users 
+       SET name = $1, 
+           email = $2, 
+           phone = $3, 
+           role = $4, 
+           residency_status = $5, 
+           registration_status = $6, 
+           flat_info = $7, 
+           department_id = $8 
+       WHERE id = $9`,
+      [
+        updatedName,
+        updatedEmail,
+        updatedPhone,
+        updatedRole,
+        updatedResidency,
+        updatedStatus,
+        updatedFlatInfo,
+        updatedDeptId,
+        id,
+      ]
+    );
+
+    await db.query(
+      `INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, remarks) VALUES ($1, $2, $3, $4, $5)`,
+      [
+        req.user.id,
+        'UPDATE_USER_DETAILS',
+        'USER',
+        id,
+        `Super Admin ${req.user.name} updated user #${id} (${updatedName}). Status: ${updatedStatus}, Role: ${updatedRole}`,
+      ]
+    );
+
+    broadcastSyncEvent('USER_UPDATED', {
+      user_id: id,
+      name: updatedName,
+      status: updatedStatus,
+      updated_by: req.user.name,
+      timestamp: new Date(),
+    });
+
+    res.json({
+      success: true,
+      message: `User '${updatedName}' updated successfully! Status set to ${updatedStatus}.`,
+    });
+  } catch (err) {
+    console.error('Error updating user details:', err);
+    res.status(500).json({ success: false, message: 'Failed to update user details.' });
   }
 }
 
@@ -484,6 +619,7 @@ module.exports = {
   getAllUsers,
   getDepartments,
   createSingleUser,
+  updateSingleUser,
   bulkUploadUsers,
   bulkUploadVisitors,
   getGateCategoryRules,
@@ -492,4 +628,6 @@ module.exports = {
   updateL2MatrixRule,
   getAllPendingL2Approvals,
   processL2ApprovalByAdmin,
+  getGateDirectionConfig,
+  updateGateDirectionConfig,
 };

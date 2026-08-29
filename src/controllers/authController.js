@@ -61,6 +61,29 @@ async function login(req, res) {
       return res.status(401).json({ success: false, message: 'Invalid credentials.' });
     }
 
+    // Only ACTIVE users are permitted to log in (Default status is ACTIVE)
+    const userStatus = user.registration_status || 'ACTIVE';
+    if (userStatus !== 'ACTIVE') {
+      let statusMsg = 'Your account is not active. Please contact administrator.';
+      if (userStatus === 'PENDING_APPROVAL') {
+        statusMsg = 'Your account registration is pending admin approval.';
+      } else if (userStatus === 'REJECTED') {
+        statusMsg = 'Your account registration has been rejected by admin.';
+      } else if (userStatus === 'SUSPENDED') {
+        statusMsg = 'Your account is suspended. Please contact administrator.';
+      }
+
+      await logSystemAction({ user, headers: req.headers, socket: req.socket, ip: req.ip }, {
+        action: 'USER_LOGIN_BLOCKED',
+        entity_type: 'USER',
+        entity_id: user.id,
+        status: 'BLOCKED',
+        remarks: `Login blocked for user ${user.name} (${user.email}) because status is '${userStatus}'`,
+      });
+
+      return res.status(403).json({ success: false, message: statusMsg, registration_status: userStatus });
+    }
+
     const userGuid = generateUserGuid(user);
 
     const payload = {
