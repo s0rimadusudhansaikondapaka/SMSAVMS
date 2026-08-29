@@ -55,10 +55,14 @@ async function initDb() {
       const schemaSql = fs.readFileSync(path.join(__dirname, '..', 'db', 'schema.sql'), 'utf8');
       const seedSql = fs.readFileSync(path.join(__dirname, '..', 'db', 'seed.sql'), 'utf8');
       await pool.query(schemaSql);
-      await pool.query(seedSql);
+      try {
+        await pool.query(seedSql);
+      } catch (s2Err) {
+        // Ignore duplicate seed row insertions on embedded DB
+      }
       console.log(`[PostgreSQL DB] Embedded PostgreSQL engine initialized with schema and sample data for database '${process.env.DB_NAME || 'vm'}'.`);
     } catch (sErr) {
-      console.error('[PostgreSQL DB Error] Error seeding embedded PostgreSQL engine:', sErr);
+      console.error('[PostgreSQL DB Error] Error seeding embedded PostgreSQL engine:', sErr.message || sErr);
     }
     // Trigger safe idempotent auto-migrations
     try {

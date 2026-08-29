@@ -81,87 +81,73 @@ async function runAutoMigrations() {
     `);
 
     // 4. Resident Family Members Table
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS resident_family_members (
-        id SERIAL PRIMARY KEY,
-        resident_id INT,
-        user_id INT,
-        full_name VARCHAR(255),
-        relationship VARCHAR(100),
-        phone VARCHAR(50),
-        email VARCHAR(150),
-        age INT,
-        gender VARCHAR(20),
-        photo_url TEXT,
-        id_card_number VARCHAR(100),
-        is_active BOOLEAN DEFAULT true,
-        is_pro_approved BOOLEAN DEFAULT true,
-        pro_approved_by INT,
-        pro_approved_at TIMESTAMP,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
+    try {
+      await db.query(`
+        ALTER TABLE resident_family_members 
+        ADD COLUMN IF NOT EXISTS user_id INT,
+        ADD COLUMN IF NOT EXISTS email VARCHAR(150),
+        ADD COLUMN IF NOT EXISTS age INT,
+        ADD COLUMN IF NOT EXISTS gender VARCHAR(20),
+        ADD COLUMN IF NOT EXISTS is_active BOOLEAN;
 
-      ALTER TABLE resident_family_members 
-      ADD COLUMN IF NOT EXISTS user_id INT,
-      ADD COLUMN IF NOT EXISTS email VARCHAR(150),
-      ADD COLUMN IF NOT EXISTS age INT,
-      ADD COLUMN IF NOT EXISTS gender VARCHAR(20),
-      ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true;
-
-      ALTER TABLE users 
-      ADD COLUMN IF NOT EXISTS primary_resident_id INT;
-    `);
+        ALTER TABLE users 
+        ADD COLUMN IF NOT EXISTS primary_resident_id INT;
+      `);
+    } catch (fmErr) {}
 
     // 5. System Settings Table
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS system_settings (
-        key VARCHAR(100),
-        value VARCHAR(255),
-        description TEXT,
-        updated_at TIMESTAMP
-      );
-    `);
+    try {
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS system_settings (
+          key VARCHAR(100),
+          value VARCHAR(255),
+          description TEXT,
+          updated_at TIMESTAMP
+        );
+      `);
+    } catch (e) {}
 
     // 6. L2 Approval Matrix Rules Table
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS l2_approval_matrix_rules (
-        id SERIAL PRIMARY KEY,
-        host_category VARCHAR(50),
-        visit_type_category VARCHAR(50),
-        approver_type VARCHAR(50),
-        is_enabled BOOLEAN,
-        updated_at TIMESTAMP
-      );
-    `);
+    try {
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS l2_approval_matrix_rules (
+          id SERIAL PRIMARY KEY,
+          host_category VARCHAR(50),
+          visit_type_category VARCHAR(50),
+          approver_type VARCHAR(50),
+          is_enabled BOOLEAN,
+          updated_at TIMESTAMP
+        );
+      `);
+    } catch (e) {}
 
     // 7. Gate Category Rules Table & Direction Columns
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS gate_category_rules (
-        id SERIAL PRIMARY KEY,
-        gate_name VARCHAR(100),
-        visitor_category VARCHAR(50),
-        is_allowed BOOLEAN,
-        direction_mode VARCHAR(50) DEFAULT 'BOTH',
-        allow_in BOOLEAN DEFAULT true,
-        allow_out BOOLEAN DEFAULT true,
-        updated_at TIMESTAMP
-      );
+    try {
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS gate_category_rules (
+          id SERIAL PRIMARY KEY,
+          gate_name VARCHAR(100),
+          visitor_category VARCHAR(50),
+          is_allowed BOOLEAN,
+          direction_mode VARCHAR(50),
+          allow_in BOOLEAN,
+          allow_out BOOLEAN,
+          updated_at TIMESTAMP
+        );
+      `);
+    } catch (e) {}
 
-      ALTER TABLE gate_category_rules 
-      ADD COLUMN IF NOT EXISTS direction_mode VARCHAR(50) DEFAULT 'BOTH',
-      ADD COLUMN IF NOT EXISTS allow_in BOOLEAN DEFAULT true,
-      ADD COLUMN IF NOT EXISTS allow_out BOOLEAN DEFAULT true;
-    `);
-
-    // 8. Gate Direction Config Table (IN/OUT states configurable by Super Admin)
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS gate_direction_config (
-        gate_name VARCHAR(100),
-        direction_mode VARCHAR(50),
-        is_active BOOLEAN,
-        updated_at TIMESTAMP
-      );
-    `);
+    // 8. Gate Direction Config Table
+    try {
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS gate_direction_config (
+          gate_name VARCHAR(100),
+          direction_mode VARCHAR(50),
+          is_active BOOLEAN,
+          updated_at TIMESTAMP
+        );
+      `);
+    } catch (e) {}
 
     // Seed default L2 matrix rules
     const defaultL2Rules = [
