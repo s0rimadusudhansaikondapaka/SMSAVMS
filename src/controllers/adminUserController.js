@@ -7,7 +7,7 @@ const { broadcastSyncEvent } = require('../sockets/syncServer');
 async function getAllUsers(req, res) {
   try {
     const result = await db.query(
-      `SELECT u.id, u.name, u.email, u.phone, u.role, u.residency_status, u.registration_status, u.department_id, u.flat_info, COALESCE(u.flat_info, 'Ashram Campus') as address, u.created_at, d.name as department_name
+      `SELECT u.id, u.name, u.email, u.phone, u.role, COALESCE(u.user_type, u.role, 'RESIDENT') as user_type, u.residency_status, u.registration_status, u.department_id, u.flat_info, COALESCE(u.flat_info, 'Ashram Campus') as address, u.created_at, d.name as department_name
        FROM users u
        LEFT JOIN departments d ON u.department_id = d.id
        ORDER BY u.id DESC`
@@ -32,24 +32,29 @@ async function getDepartments(req, res) {
 
 // Create single user by Admin (Wizard)
 async function createSingleUser(req, res) {
-  const { name, email, phone, role, residency_status, department_id, password, address, flat_info } = req.body;
+  const { name, email, phone, role, user_type, residency_status, department_id, password, address, flat_info } = req.body;
   const userAddress = address || flat_info || '';
 
-  if (!name || !email || !phone || !role) {
-    return res.status(400).json({ success: false, message: 'Name, email, phone, and role are required.' });
+  if (!name || !email || !phone) {
+    return res.status(400).json({ success: false, message: 'Name, email, and phone are required.' });
   }
 
-  const validRoles = ['RESIDENT', 'EMPLOYEE', 'RESIDENT_EMPLOYEE', 'HOD', 'PRO', 'GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'];
-  if (!validRoles.includes(role)) {
-    return res.status(400).json({ success: false, message: `Invalid role. Must be one of: ${validRoles.join(', ')}` });
+  let finalUserType = user_type || (['RESIDENT', 'EMPLOYEE', 'RESIDENT_EMPLOYEE', 'VOLUNTEER', 'STUDENT', 'GUEST'].includes(role) ? role : 'RESIDENT');
+  let finalRole = role || 'HOST';
+
+  // If role is passed as a user type (e.g. RESIDENT or RESIDENT_EMPLOYEE), normalize role to HOST or user_type
+  if (['RESIDENT', 'EMPLOYEE', 'RESIDENT_EMPLOYEE'].includes(finalRole) && (!user_type || user_type === finalRole)) {
+    finalUserType = finalRole;
+    finalRole = 'HOST';
   }
 
-  const validResidency = residency_status || (role === 'RESIDENT' ? 'RESIDENT' : 'NON_RESIDENT');
+  const validResidency = residency_status || (finalUserType.includes('RESIDENT') ? 'RESIDENT' : 'NON_RESIDENT');
 
   try {
-    // Ensure users_role_check constraint is dropped dynamically to allow RESIDENT_EMPLOYEE
+    // Ensure users_role_check constraint is dropped dynamically & user_type column exists
     try {
       await db.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;`);
+      await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS user_type VARCHAR(50) DEFAULT 'RESIDENT';`);
     } catch (cErr) {}
 
     // Check duplicates
@@ -67,10 +72,10 @@ async function createSingleUser(req, res) {
     const hashedPassword = await bcrypt.hash(userPassword, 10);
 
     const result = await db.query(
-      `INSERT INTO users (name, email, phone, role, residency_status, department_id, password_hash, flat_info, registration_status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'ACTIVE')
-       RETURNING id, name, email, phone, role, residency_status, department_id, flat_info, registration_status, created_at`,
-      [name, email, phone, role, validResidency, department_id || null, hashedPassword, userAddress]
+      `INSERT INTO users (name, email, phone, role, user_type, residency_status, department_id, password_hash, flat_info, registration_status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'ACTIVE')
+       RETURNING id, name, email, phone, role, user_type, residency_status, department_id, flat_info, registration_status, created_at`,
+      [name, email, phone, finalRole, finalUserType, validResidency, department_id || null, hashedPassword, userAddress]
     );
 
     const newUser = result.rows[0];
@@ -79,13 +84,13 @@ async function createSingleUser(req, res) {
     try {
       await db.query(
         `INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, remarks) VALUES ($1, $2, $3, $4, $5)`,
-        [req.user.id, 'CREATE_USER_WIZARD', 'USER', newUser.id, `Admin ${req.user.name} created user ${name} (${role})`]
+        [req.user.id, 'CREATE_USER_WIZARD', 'USER', newUser.id, `Admin ${req.user.name} created user ${name} (${finalUserType} - ${finalRole})`]
       );
     } catch (aErr) {}
 
     res.status(201).json({
       success: true,
-      message: `User '${name}' created successfully with role ${role}.`,
+      message: `User '${name}' created successfully as ${finalUserType} with role ${finalRole}.`,
       user: newUser,
     });
   } catch (err) {
@@ -598,6 +603,7 @@ async function updateSingleUser(req, res) {
     email,
     phone,
     role,
+    user_type,
     residency_status,
     registration_status,
     flat_info,
@@ -611,6 +617,7 @@ async function updateSingleUser(req, res) {
   try {
     try {
       await db.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;`);
+      await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS user_type VARCHAR(50) DEFAULT 'RESIDENT';`);
     } catch (cErr) {}
 
     const existingRes = await db.query('SELECT * FROM users WHERE id = $1', [id]);
@@ -624,6 +631,7 @@ async function updateSingleUser(req, res) {
     const updatedEmail = email || existingUser.email;
     const updatedPhone = phone || existingUser.phone;
     const updatedRole = role || existingUser.role;
+    const updatedUserType = user_type || existingUser.user_type || (['RESIDENT', 'EMPLOYEE', 'RESIDENT_EMPLOYEE'].includes(updatedRole) ? updatedRole : 'RESIDENT');
     const updatedResidency = residency_status || existingUser.residency_status;
     const updatedStatus = registration_status || existingUser.registration_status || 'ACTIVE';
     const updatedFlatInfo = flat_info !== undefined ? flat_info : existingUser.flat_info;
@@ -635,16 +643,18 @@ async function updateSingleUser(req, res) {
            email = $2, 
            phone = $3, 
            role = $4, 
-           residency_status = $5, 
-           registration_status = $6, 
-           flat_info = $7, 
-           department_id = $8 
-       WHERE id = $9`,
+           user_type = $5,
+           residency_status = $6, 
+           registration_status = $7, 
+           flat_info = $8, 
+           department_id = $9 
+       WHERE id = $10`,
       [
         updatedName,
         updatedEmail,
         updatedPhone,
         updatedRole,
+        updatedUserType,
         updatedResidency,
         updatedStatus,
         updatedFlatInfo,

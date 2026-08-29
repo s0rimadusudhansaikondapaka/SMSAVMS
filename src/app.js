@@ -10,6 +10,7 @@ const { initWebSocketServer } = require('./sockets/syncServer');
 const { startExpiryService } = require('./controllers/expiryService');
 
 const app = express();
+app.set('trust proxy', true);
 const PORT = process.env.PORT || 5004;
 
 const defaultAllowedOrigins = [

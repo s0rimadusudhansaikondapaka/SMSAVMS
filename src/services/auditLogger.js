@@ -1,19 +1,36 @@
 const db = require('../config/db');
 
+function extractClientIp(req) {
+  if (!req) return '127.0.0.1';
+
+  // 1. Check standard proxy headers (Render, AWS ALB, Nginx, Cloudflare)
+  const forwarded = req.headers?.['x-forwarded-for'];
+  if (forwarded) {
+    const ips = String(forwarded).split(',').map((ip) => ip.trim());
+    if (ips[0] && ips[0] !== '::1' && ips[0] !== '127.0.0.1') {
+      return ips[0].replace(/^::ffff:/, '');
+    }
+  }
+
+  const realIp = req.headers?.['x-real-ip'] || req.headers?.['cf-connecting-ip'] || req.headers?.['fastly-client-ip'] || req.headers?.['true-client-ip'];
+  if (realIp) {
+    return String(realIp).trim().replace(/^::ffff:/, '');
+  }
+
+  // 2. Express req.ip or socket connection IP
+  let rawIp = req.ip || req.socket?.remoteAddress || req.connection?.remoteAddress || '127.0.0.1';
+  rawIp = String(rawIp).replace(/^::ffff:/, '');
+  if (rawIp === '::1') return '127.0.0.1';
+
+  return rawIp;
+}
+
 async function logSystemAction(req, { action, entity_type = 'GENERAL', entity_id = null, remarks = '', status = 'SUCCESS' }) {
   try {
     const actorId = req?.user?.id || null;
     const actorName = req?.user?.name || (actorId ? 'System User' : 'Guest / Visitor');
     const actorRole = req?.user?.role || 'SYSTEM';
-    
-    // Extract Client IP
-    let ipAddress = '127.0.0.1';
-    if (req) {
-      ipAddress = req.headers?.['x-forwarded-for'] || req.socket?.remoteAddress || req.ip || '127.0.0.1';
-      if (typeof ipAddress === 'string' && ipAddress.includes(',')) {
-        ipAddress = ipAddress.split(',')[0].trim();
-      }
-    }
+    const ipAddress = extractClientIp(req);
 
     await db.query(
       `INSERT INTO audit_logs (actor_id, actor_name, actor_role, action, entity_type, entity_id, ip_address, status, remarks, timestamp)
@@ -25,4 +42,4 @@ async function logSystemAction(req, { action, entity_type = 'GENERAL', entity_id
   }
 }
 
-module.exports = { logSystemAction };
+module.exports = { logSystemAction, extractClientIp };

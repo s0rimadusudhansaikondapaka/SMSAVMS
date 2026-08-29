@@ -9,9 +9,22 @@ async function runAutoMigrations() {
   try {
     console.log('[AutoMigration] Running database schema auto-migrations...');
 
-    // 0. Drop strict users_role_check constraint to allow RESIDENT_EMPLOYEE
+    // 0. Drop strict users_role_check constraint and add user_type column
     try {
       await db.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;`);
+      await db.query(`
+        ALTER TABLE users 
+        ADD COLUMN IF NOT EXISTS user_type VARCHAR(50) DEFAULT 'RESIDENT';
+      `);
+      await db.query(`
+        UPDATE users 
+        SET user_type = CASE 
+          WHEN role IN ('RESIDENT', 'EMPLOYEE', 'RESIDENT_EMPLOYEE') THEN role 
+          WHEN residency_status = 'RESIDENT' THEN 'RESIDENT' 
+          ELSE 'EMPLOYEE' 
+        END 
+        WHERE user_type IS NULL OR user_type = '';
+      `);
     } catch (rErr) {}
 
     // 1. Audit Logs Columns
