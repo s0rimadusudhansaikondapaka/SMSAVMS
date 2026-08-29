@@ -326,6 +326,16 @@ async function toggleGateCategoryRule(req, res) {
   const allowOutBool = finalMode === 'BOTH' || finalMode === 'OUT_ONLY';
 
   try {
+    // Dynamic schema auto-migration for direction_mode columns
+    try {
+      await db.query(`
+        ALTER TABLE gate_category_rules 
+        ADD COLUMN IF NOT EXISTS direction_mode VARCHAR(50) DEFAULT 'BOTH',
+        ADD COLUMN IF NOT EXISTS allow_in BOOLEAN DEFAULT true,
+        ADD COLUMN IF NOT EXISTS allow_out BOOLEAN DEFAULT true;
+      `);
+    } catch (colErr) {}
+
     const existing = await db.query(
       `SELECT id FROM gate_category_rules WHERE gate_name = $1 AND visitor_category = $2`,
       [gate_name, visitor_category]
@@ -346,15 +356,17 @@ async function toggleGateCategoryRule(req, res) {
       );
     }
 
-    await db.query(
-      `INSERT INTO audit_logs (actor_id, action, entity_type, remarks) VALUES ($1, $2, $3, $4)`,
-      [
-        req.user.id,
-        'UPDATE_GATE_CATEGORY_RULE',
-        'GATE_RULE',
-        `Super Admin ${req.user.name} set category '${visitor_category}' at gate '${gate_name}' to direction state '${finalMode}' (IN: ${allowInBool}, OUT: ${allowOutBool})`,
-      ]
-    );
+    try {
+      await db.query(
+        `INSERT INTO audit_logs (actor_id, action, entity_type, remarks) VALUES ($1, $2, $3, $4)`,
+        [
+          req.user.id,
+          'UPDATE_GATE_CATEGORY_RULE',
+          'GATE_RULE',
+          `Super Admin ${req.user.name} set category '${visitor_category}' at gate '${gate_name}' to direction state '${finalMode}' (IN: ${allowInBool}, OUT: ${allowOutBool})`,
+        ]
+      );
+    } catch (auditErr) {}
 
     broadcastSyncEvent('GATE_RULE_UPDATED', {
       gate_name,
@@ -371,7 +383,7 @@ async function toggleGateCategoryRule(req, res) {
     });
   } catch (err) {
     console.error('Error updating gate category rule:', err);
-    res.status(500).json({ success: false, message: 'Failed to update gate category rule.' });
+    res.status(500).json({ success: false, message: err.message || 'Failed to update gate category rule.' });
   }
 }
 

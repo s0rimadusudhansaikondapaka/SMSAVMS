@@ -10,8 +10,16 @@ async function initGateCategoryRules() {
           gate_name VARCHAR(50),
           visitor_category VARCHAR(50),
           is_allowed BOOLEAN,
+          direction_mode VARCHAR(50) DEFAULT 'BOTH',
+          allow_in BOOLEAN DEFAULT true,
+          allow_out BOOLEAN DEFAULT true,
           updated_at TIMESTAMP
       );
+
+      ALTER TABLE gate_category_rules 
+      ADD COLUMN IF NOT EXISTS direction_mode VARCHAR(50) DEFAULT 'BOTH',
+      ADD COLUMN IF NOT EXISTS allow_in BOOLEAN DEFAULT true,
+      ADD COLUMN IF NOT EXISTS allow_out BOOLEAN DEFAULT true;
     `);
 
     const gates = ['NORTH_GATE', 'SOUTH_GATE', 'EAST_GATE', 'WEST_GATE', 'STAFF_GATE'];
