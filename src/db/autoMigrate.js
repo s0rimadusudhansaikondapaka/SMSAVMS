@@ -31,6 +31,27 @@ async function runAutoMigrations() {
       `);
     } catch (rErr) {}
 
+    // Sync sequence generators for tables seeded with explicit IDs
+    const tablesWithSeq = [
+      'users', 'visitors', 'registrations', 'gate_logs', 'audit_logs',
+      'departments', 'gate_category_rules', 'l2_approval_matrix_rules',
+      'registration_vehicles', 'resident_family_members', 'resident_absences', 'approvers_config'
+    ];
+
+    for (const t of tablesWithSeq) {
+      try {
+        await db.query(`
+          SELECT setval(pg_get_serial_sequence('${t}', 'id'), COALESCE((SELECT MAX(id) FROM ${t}), 1));
+        `);
+      } catch (seqErr) {
+        try {
+          await db.query(`
+            SELECT setval('${t}_id_seq', COALESCE((SELECT MAX(id) FROM ${t}), 1));
+          `);
+        } catch (s2) {}
+      }
+    }
+
     // 1. Audit Logs Columns
     await db.query(`
       ALTER TABLE audit_logs 
