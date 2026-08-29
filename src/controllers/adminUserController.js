@@ -439,6 +439,13 @@ async function processL2ApprovalByAdmin(req, res) {
       [req.user.id, req.user.name, req.user.role, auditAction, 'REGISTRATION', registration_id, 'SUCCESS', auditRemarks]
     );
 
+    if (newStatus === 'APPROVED' && regRes.rows[0].family_member_id) {
+      await db.query(
+        `UPDATE resident_family_members SET is_pro_approved = true, pro_approved_by = $1, pro_approved_at = CURRENT_TIMESTAMP WHERE id = $2`,
+        [req.user.id, regRes.rows[0].family_member_id]
+      );
+    }
+
     // Broadcast WebSocket Event
     broadcastSyncEvent('REGISTRATION_UPDATED', { registration_id, status: newStatus, updated_by: req.user.name });
 

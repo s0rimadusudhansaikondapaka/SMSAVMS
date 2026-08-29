@@ -38,11 +38,13 @@ async function verifyGatePass(req, res) {
       `SELECT r.*, 
               v.full_name as visitor_name, v.phone as visitor_phone, v.email as visitor_email, v.gender as visitor_gender,
               v.photo_url, v.id_type, v.id_number, v.id_card_number, v.id_card_image_url, v.visitor_category, v.company_name, v.is_frequent_visitor, v.has_smartphone,
-              u.name as host_name, u.phone as host_phone,
+              u.name as host_name, u.phone as host_phone, u.flat_info as host_flat_info, u.role as host_role,
+              rfm.relationship as family_relationship,
               app_user.name as audit_approver_name, app_user.role as audit_approver_role
        FROM registrations r 
        JOIN visitors v ON r.visitor_id = v.id 
        LEFT JOIN users u ON r.host_id = u.id 
+       LEFT JOIN resident_family_members rfm ON r.family_member_id = rfm.id
        LEFT JOIN LATERAL (
          SELECT actor_id FROM audit_logs 
          WHERE entity_id = r.id AND (action LIKE '%APPROVE%' OR action LIKE '%CREATE%') 
@@ -211,7 +213,7 @@ async function processGateMovement(req, res) {
     const windowEnd = new Date(validUntil.getTime() + graceHours * 60 * 60 * 1000);
 
     if (direction === 'IN') {
-      if (reg.status !== 'APPROVED' && reg.status !== 'CHECKED_OUT' && !reg.is_vvip && !reg.bypassed_by_admin) {
+      if (reg.status !== 'APPROVED' && reg.status !== 'CHECKED_OUT' && reg.status !== 'INSIDE_CAMPUS' && !reg.is_vvip && !reg.bypassed_by_admin) {
         await db.query('ROLLBACK');
         return res.status(400).json({ success: false, message: `Cannot process IN entry. Pass status is ${reg.status}` });
       }

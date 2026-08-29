@@ -118,16 +118,53 @@ async function createRegistration(req, res) {
       }
     }
 
-    // Determine if pass is permanent (Maids, Devotees, Frequent Visitors, Caretakers, Daily Labours)
-    const isPermanent = is_permanent || visitor_category === 'MAID' || visitor_category === 'DEVOTEE' || visitor_category === 'FREQUENT_VISITOR' || visitor_category === 'CARETAKER';
-    if (isPermanent) {
-      initialStatus = 'APPROVED'; // Permanent passes registered by Referrer/SO are pre-approved
+    // First-Time Family Member PRO Approval vs Direct Renewal Logic
+    const isFamilyMember = visitor_category === 'FAMILY_MEMBER' || req.body.is_family_member || req.body.relationship;
+    const isPermanentStaff = visitor_category === 'MAID' || visitor_category === 'DEVOTEE' || visitor_category === 'FREQUENT_VISITOR' || visitor_category === 'CARETAKER';
+    const relationshipToResident = req.body.relationship || (isFamilyMember ? 'Family Relative' : null);
+
+    let isPriorProApproved = false;
+    let familyMemberRecordId = req.body.family_member_id || null;
+
+    if (isFamilyMember) {
+      const famCheck = await db.query(
+        `SELECT id, is_pro_approved FROM resident_family_members 
+         WHERE resident_id = $1 AND (full_name ILIKE $2 OR (phone = $3 AND phone <> '')) LIMIT 1`,
+        [host_id || req.user?.id, full_name, phone || '']
+      );
+
+      if (famCheck.rows.length > 0) {
+        familyMemberRecordId = famCheck.rows[0].id;
+        isPriorProApproved = famCheck.rows[0].is_pro_approved === true;
+      } else {
+        const famInsert = await db.query(
+          `INSERT INTO resident_family_members (resident_id, full_name, relationship, phone, photo_url, id_card_number, is_pro_approved)
+           VALUES ($1, $2, $3, $4, $5, $6, false) RETURNING id`,
+          [host_id || req.user?.id, full_name, relationshipToResident, phone || '', photo_url || '', id_card_number || '', false]
+        );
+        familyMemberRecordId = famInsert.rows[0].id;
+        isPriorProApproved = false;
+      }
+    }
+
+    if (isFamilyMember) {
+      if (isPriorProApproved) {
+        initialStatus = 'APPROVED'; // Renewal pass auto-approved by Resident Host!
+      } else {
+        initialStatus = 'PENDING_L2'; // First-time family pass requires PRO Team Approval!
+      }
       validUntilTime = new Date(validFromTime);
-      validUntilTime.setFullYear(validUntilTime.getFullYear() + 2); // Valid for 2 years (permanent)
+      validUntilTime.setFullYear(validUntilTime.getFullYear() + 2);
+    } else if (isPermanentStaff || is_permanent) {
+      initialStatus = 'APPROVED';
+      validUntilTime = new Date(validFromTime);
+      validUntilTime.setFullYear(validUntilTime.getFullYear() + 2);
     }
 
     // Generate unique category-aware Pass Code
-    const passCodePrefix = visitor_category === 'MAID' 
+    const passCodePrefix = visitor_category === 'FAMILY_MEMBER'
+      ? 'FAM-PERM'
+      : visitor_category === 'MAID' 
       ? 'MAID-PERM' 
       : (visitor_category === 'DEVOTEE' || visitor_category === 'FREQUENT_VISITOR') 
       ? 'DEVOTEE-PERM' 
@@ -151,14 +188,15 @@ async function createRegistration(req, res) {
     // Insert Registration
     const regRes = await db.query(
       `INSERT INTO registrations 
-       (visitor_id, host_id, purpose, visit_type, stay_required, accommodation_approved, priority, status, pass_code, valid_from, valid_until, adult_men_count, adult_women_count, children_count, boys_count, girls_count, person_count, is_vvip)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+       (visitor_id, host_id, family_member_id, purpose, visit_type, stay_required, accommodation_approved, priority, status, pass_code, valid_from, valid_until, adult_men_count, adult_women_count, children_count, boys_count, girls_count, person_count, is_vvip, relationship_to_resident)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
        RETURNING *`,
       [
         visitorId,
         host_id || req.user?.id || null,
-        purpose || 'General Visit',
-        visit_type || 'OFFICE',
+        familyMemberRecordId,
+        purpose || 'Family Visit / Ashram Stay',
+        visit_type || 'HOME',
         stay_required || false,
         false,
         priority || (is_vvip ? 'P1' : 'P3'),
@@ -173,6 +211,7 @@ async function createRegistration(req, res) {
         girlsCount,
         totalCount,
         is_vvip || false,
+        relationshipToResident,
       ]
     );
 
@@ -403,6 +442,13 @@ async function updateApproval(req, res) {
       `INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, remarks) VALUES ($1, $2, $3, $4, $5)`,
       [req.user.id, `APPROVAL_${action}`, 'REGISTRATION', registration_id, remarks || `Action ${action} by ${req.user.name}`]
     );
+
+    if (newStatus === 'APPROVED' && reg.family_member_id) {
+      await db.query(
+        `UPDATE resident_family_members SET is_pro_approved = true, pro_approved_by = $1, pro_approved_at = CURRENT_TIMESTAMP WHERE id = $2`,
+        [req.user.id, reg.family_member_id]
+      );
+    }
 
     broadcastSyncEvent('REGISTRATION_UPDATED', {
       registrationId: registration_id,
