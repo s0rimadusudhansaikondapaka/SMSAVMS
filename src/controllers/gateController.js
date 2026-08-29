@@ -387,10 +387,12 @@ async function assignHostToSpotRegistration(req, res) {
     const vRes = await db.query('SELECT full_name FROM visitors WHERE id = $1', [reg.visitor_id]);
     const visitorName = vRes.rows.length > 0 ? vRes.rows[0].full_name : 'Visitor';
 
-    await db.query(
-      `INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, remarks) VALUES ($1, $2, $3, $4, $5)`,
-      [req.user.id, 'ASSIGN_SPOT_HOST', 'REGISTRATION', registration_id, `Guard assigned host ${host.name} to spot registration #${registration_id}. ${remarks || ''}`]
-    );
+    await logSystemAction(req, {
+      action: 'ASSIGN_SPOT_HOST',
+      entity_type: 'REGISTRATION',
+      entity_id: registration_id,
+      remarks: `Guard assigned host ${host.name} to spot registration #${registration_id}. ${remarks || ''}`,
+    });
 
     await db.query('COMMIT');
 

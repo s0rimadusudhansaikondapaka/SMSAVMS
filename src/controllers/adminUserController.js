@@ -8,7 +8,10 @@ const { logSystemAction } = require('../services/auditLogger');
 async function getAllUsers(req, res) {
   try {
     const result = await db.query(
-      `SELECT u.id, u.name, u.email, u.phone, u.role, COALESCE(u.user_type, u.role, 'RESIDENT') as user_type, u.residency_status, u.registration_status, u.department_id, u.flat_info, COALESCE(u.flat_info, 'Ashram Campus') as address, u.created_at, d.name as department_name
+      `SELECT u.id, u.name, u.email, u.phone, 
+              CASE WHEN u.role IN ('RESIDENT', 'EMPLOYEE', 'RESIDENT_EMPLOYEE') THEN 'HOST' ELSE u.role END as role, 
+              COALESCE(u.user_type, CASE WHEN u.role IN ('RESIDENT', 'EMPLOYEE', 'RESIDENT_EMPLOYEE') THEN u.role ELSE 'RESIDENT' END) as user_type, 
+              u.residency_status, u.registration_status, u.department_id, u.flat_info, COALESCE(u.flat_info, 'Ashram Campus') as address, u.created_at, d.name as department_name
        FROM users u
        LEFT JOIN departments d ON u.department_id = d.id
        ORDER BY u.id DESC`

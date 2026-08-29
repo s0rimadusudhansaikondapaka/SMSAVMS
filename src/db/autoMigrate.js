@@ -21,9 +21,13 @@ async function runAutoMigrations() {
         SET user_type = CASE 
           WHEN role IN ('RESIDENT', 'EMPLOYEE', 'RESIDENT_EMPLOYEE') THEN role 
           WHEN residency_status = 'RESIDENT' THEN 'RESIDENT' 
-          ELSE 'EMPLOYEE' 
+          ELSE COALESCE(user_type, 'RESIDENT')
         END 
         WHERE user_type IS NULL OR user_type = '';
+
+        UPDATE users 
+        SET user_type = role, role = 'HOST' 
+        WHERE role IN ('RESIDENT', 'EMPLOYEE', 'RESIDENT_EMPLOYEE');
       `);
     } catch (rErr) {}
 

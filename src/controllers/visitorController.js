@@ -249,10 +249,12 @@ async function createRegistration(req, res) {
       registration.approved_by_role = req.user?.role || 'RESIDENT';
     }
 
-    await db.query(
-      `INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, remarks) VALUES ($1, $2, $3, $4, $5)`,
-      [req.user?.id || null, 'CREATE_REGISTRATION', 'REGISTRATION', registration.id, `Created pass ${passCode} (Total People: ${totalCount})`]
-    );
+    await logSystemAction(req, {
+      action: 'CREATE_REGISTRATION',
+      entity_type: 'REGISTRATION',
+      entity_id: registration.id,
+      remarks: `Created pass ${passCode} (Total People: ${totalCount})`,
+    });
 
     await db.query('COMMIT');
 
@@ -447,10 +449,12 @@ async function updateApproval(req, res) {
       await db.query(`UPDATE visitors SET visitor_category = $1 WHERE id = $2`, [visitor_category, reg.visitor_id]);
     }
 
-    await db.query(
-      `INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, remarks) VALUES ($1, $2, $3, $4, $5)`,
-      [req.user.id, `APPROVAL_${action}`, 'REGISTRATION', registration_id, remarks || `Action ${action} by ${req.user.name}`]
-    );
+    await logSystemAction(req, {
+      action: `APPROVAL_${action}`,
+      entity_type: 'REGISTRATION',
+      entity_id: registration_id,
+      remarks: remarks || `Action ${action} by ${req.user.name}`,
+    });
 
     if (newStatus === 'APPROVED' && reg.family_member_id) {
       await db.query(
@@ -652,10 +656,12 @@ async function updateRegistration(req, res) {
       }
     }
 
-    await db.query(
-      `INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, remarks) VALUES ($1, $2, $3, $4, $5)`,
-      [req.user?.id || null, 'EDIT_REGISTRATION', 'REGISTRATION', id, `Updated registration pre-approval details`]
-    );
+    await logSystemAction(req, {
+      action: 'EDIT_REGISTRATION',
+      entity_type: 'REGISTRATION',
+      entity_id: id,
+      remarks: 'Updated registration pre-approval details',
+    });
 
     await db.query('COMMIT');
 
@@ -901,10 +907,12 @@ async function createPublicVisitorRegistration(req, res) {
       );
     }
 
-    await db.query(
-      `INSERT INTO audit_logs (action, entity_type, entity_id, remarks) VALUES ($1, $2, $3, $4)`,
-      ['PUBLIC_VISITOR_SUBMIT', 'REGISTRATION', registration.id, `Visitor ${full_name} submitted self-invite form for Host #${host_id}`]
-    );
+    await logSystemAction(req, {
+      action: 'PUBLIC_VISITOR_SUBMIT',
+      entity_type: 'REGISTRATION',
+      entity_id: registration.id,
+      remarks: `Visitor ${full_name} submitted self-invite form for Host #${host_id}`,
+    });
 
     await db.query('COMMIT');
 
@@ -956,10 +964,12 @@ async function generateRegistrationQr(req, res) {
       await db.query('UPDATE registrations SET qr_code_url = $1 WHERE id = $2', [qrCodeUrl, reg.id]);
     }
 
-    await db.query(
-      `INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, remarks) VALUES ($1, $2, $3, $4, $5)`,
-      [req.user.id, 'GENERATE_QR_CODE', 'REGISTRATION', reg.id, `Referrer ${req.user.name} generated QR Code for Pass ${reg.pass_code}`]
-    );
+    await logSystemAction(req, {
+      action: 'GENERATE_QR_CODE',
+      entity_type: 'REGISTRATION',
+      entity_id: reg.id,
+      remarks: `Referrer ${req.user.name} generated QR Code for Pass ${reg.pass_code}`,
+    });
 
     broadcastSyncEvent('QR_GENERATED', { registrationId: reg.id, passCode: reg.pass_code });
 
