@@ -169,6 +169,7 @@ CREATE TABLE IF NOT EXISTS users (
   email VARCHAR(150) NOT NULL,
   phone VARCHAR(20) NOT NULL,
   role VARCHAR(50) NOT NULL,
+  user_type VARCHAR(50) DEFAULT 'RESIDENT',
   residency_status VARCHAR(50) NOT NULL,
   department_id INTEGER,
   password_hash VARCHAR(255) NOT NULL,

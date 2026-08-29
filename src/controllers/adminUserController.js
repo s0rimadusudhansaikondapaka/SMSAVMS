@@ -74,13 +74,29 @@ async function createSingleUser(req, res) {
 
     const userPassword = password || 'password123';
     const hashedPassword = await bcrypt.hash(userPassword, 10);
+    const parsedDeptId = department_id ? parseInt(department_id, 10) : null;
 
-    const result = await db.query(
-      `INSERT INTO users (name, email, phone, role, user_type, residency_status, department_id, password_hash, flat_info, registration_status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'ACTIVE')
-       RETURNING id, name, email, phone, role, user_type, residency_status, department_id, flat_info, registration_status, created_at`,
-      [name, email, phone, finalRole, finalUserType, validResidency, department_id || null, hashedPassword, userAddress]
-    );
+    let result;
+    try {
+      result = await db.query(
+        `INSERT INTO users (name, email, phone, role, user_type, residency_status, department_id, password_hash, flat_info, registration_status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'ACTIVE')
+         RETURNING id, name, email, phone, role, user_type, residency_status, department_id, flat_info, registration_status, created_at`,
+        [name, email, phone, finalRole, finalUserType, validResidency, parsedDeptId, hashedPassword, userAddress]
+      );
+    } catch (insertErr) {
+      if (insertErr.message && (insertErr.message.includes('user_type') || insertErr.message.includes('column'))) {
+        result = await db.query(
+          `INSERT INTO users (name, email, phone, role, residency_status, department_id, password_hash, flat_info, registration_status)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'ACTIVE')
+           RETURNING id, name, email, phone, role, residency_status, department_id, flat_info, registration_status, created_at`,
+          [name, email, phone, finalRole, validResidency, parsedDeptId, hashedPassword, userAddress]
+        );
+        if (result.rows[0]) result.rows[0].user_type = finalUserType;
+      } else {
+        throw insertErr;
+      }
+    }
 
     const newUser = result.rows[0];
 
