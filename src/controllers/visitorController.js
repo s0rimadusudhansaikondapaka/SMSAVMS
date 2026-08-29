@@ -2,6 +2,7 @@ const QRCode = require('qrcode');
 const db = require('../config/db');
 const { broadcastSyncEvent } = require('../sockets/syncServer');
 const { sendVisitorApprovalEmail, sendHostL1NotificationEmail } = require('../services/emailService');
+const { logSystemAction } = require('../services/auditLogger');
 
 // Helper to check L2 approval toggle status
 async function isL2Enabled() {
