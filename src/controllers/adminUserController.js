@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const db = require('../config/db');
 const QRCode = require('qrcode');
 const { broadcastSyncEvent } = require('../sockets/syncServer');
+const { logSystemAction } = require('../services/auditLogger');
 
 // Get all users for admin management
 async function getAllUsers(req, res) {
@@ -81,12 +82,12 @@ async function createSingleUser(req, res) {
     const newUser = result.rows[0];
 
     // Audit log
-    try {
-      await db.query(
-        `INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, remarks) VALUES ($1, $2, $3, $4, $5)`,
-        [req.user.id, 'CREATE_USER_WIZARD', 'USER', newUser.id, `Admin ${req.user.name} created user ${name} (${finalUserType} - ${finalRole})`]
-      );
-    } catch (aErr) {}
+    await logSystemAction(req, {
+      action: 'CREATE_USER_WIZARD',
+      entity_type: 'USER',
+      entity_id: newUser.id,
+      remarks: `Admin ${req.user.name} created user ${name} (${finalUserType} - ${finalRole})`,
+    });
 
     res.status(201).json({
       success: true,
@@ -492,11 +493,13 @@ async function processL2ApprovalByAdmin(req, res) {
     );
 
     // Audit Logging
-    await db.query(
-      `INSERT INTO audit_logs (actor_id, actor_name, actor_role, action, entity_type, entity_id, status, remarks)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [req.user.id, req.user.name, req.user.role, auditAction, 'REGISTRATION', registration_id, 'SUCCESS', auditRemarks]
-    );
+    await logSystemAction(req, {
+      action: auditAction,
+      entity_type: 'REGISTRATION',
+      entity_id: registration_id,
+      remarks: auditRemarks,
+      status: 'SUCCESS',
+    });
 
     if (newStatus === 'APPROVED' && regRes.rows[0].family_member_id) {
       await db.query(
