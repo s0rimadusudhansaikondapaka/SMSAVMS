@@ -55,6 +55,7 @@ async function getReportData(req, res) {
       case 'EXCEPTION':
         queryText = `
           SELECT al.*, 
+                 COALESCE(al.guid, 'AUD-' || al.id) as guid,
                  COALESCE(al.actor_name, u.name, 'System User') as actor_name, 
                  COALESCE(al.actor_role, u.role, 'SYSTEM') as actor_role 
           FROM audit_logs al 

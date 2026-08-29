@@ -1093,6 +1093,112 @@ async function getResidentFamilyMembers(req, res) {
   }
 }
 
+// Add Resident Family Member & Create User Host Login Account
+async function addResidentFamilyMember(req, res) {
+  const { full_name, relationship, phone, email, password, age, gender } = req.body;
+  const residentId = req.user.id;
+
+  if (!full_name || !relationship) {
+    return res.status(400).json({ success: false, message: 'Full name and relationship are required.' });
+  }
+
+  try {
+    await db.query('BEGIN');
+
+    // 1. Get primary resident details
+    const resHost = await db.query('SELECT * FROM users WHERE id = $1', [residentId]);
+    if (resHost.rows.length === 0) {
+      await db.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Resident user not found.' });
+    }
+    const resident = resHost.rows[0];
+
+    // 2. Create User account for family member so they can log in & act as Host
+    const familyEmail = email || `family_${Date.now()}@ashram.org`;
+    const familyPhone = phone || resident.phone || '';
+    const userPassword = password || 'password123';
+    const hashedPassword = await bcrypt.hash(userPassword, 10);
+    const parsedAge = age ? parseInt(age, 10) : null;
+
+    let createdUserId = null;
+    const checkExistingUser = await db.query('SELECT id FROM users WHERE email = $1', [familyEmail]);
+    if (checkExistingUser.rows.length > 0) {
+      createdUserId = checkExistingUser.rows[0].id;
+    } else {
+      const newUserRes = await db.query(
+        `INSERT INTO users (name, email, phone, role, user_type, residency_status, department_id, password_hash, flat_info, registration_status, primary_resident_id)
+         VALUES ($1, $2, $3, 'HOST', 'RESIDENT_FAMILY_MEMBER', 'RESIDENT', $4, $5, $6, 'ACTIVE', $7)
+         RETURNING id`,
+        [full_name, familyEmail, familyPhone, resident.department_id || null, hashedPassword, resident.flat_info || '', residentId]
+      );
+      createdUserId = newUserRes.rows[0].id;
+    }
+
+    // 3. Insert family member mapping
+    const fmRes = await db.query(
+      `INSERT INTO resident_family_members (resident_id, user_id, full_name, relationship, phone, email, age, gender, is_pro_approved, is_active, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, true, CURRENT_TIMESTAMP)
+       RETURNING *`,
+      [residentId, createdUserId, full_name, relationship, familyPhone, familyEmail, parsedAge, gender || 'Other']
+    );
+
+    await logSystemAction(req, {
+      action: 'ADD_RESIDENT_FAMILY_MEMBER',
+      entity_type: 'USER',
+      entity_id: createdUserId,
+      remarks: `Resident ${resident.name} added family member ${full_name} (${relationship}) with host login (${familyEmail})`,
+    });
+
+    await db.query('COMMIT');
+
+    res.status(201).json({
+      success: true,
+      message: `Family member '${full_name}' added successfully! Host login account created.`,
+      family_member: fmRes.rows[0],
+      credentials: {
+        email: familyEmail,
+        password: userPassword,
+      }
+    });
+  } catch (err) {
+    await db.query('ROLLBACK');
+    console.error('Error adding resident family member:', err);
+    res.status(500).json({ success: false, message: err.message || 'Failed to add family member.' });
+  }
+}
+
+// Delete / Deactivate Resident Family Member
+async function deleteResidentFamilyMember(req, res) {
+  const { id } = req.params;
+  const residentId = req.user.id;
+
+  try {
+    const fmRes = await db.query('SELECT * FROM resident_family_members WHERE id = $1 AND resident_id = $2', [id, residentId]);
+    if (fmRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Family member not found.' });
+    }
+
+    const fm = fmRes.rows[0];
+    await db.query('DELETE FROM resident_family_members WHERE id = $1', [id]);
+
+    if (fm.user_id) {
+      await db.query(`UPDATE users SET registration_status = 'SUSPENDED' WHERE id = $1`, [fm.user_id]);
+    }
+
+    await logSystemAction(req, {
+      action: 'DELETE_RESIDENT_FAMILY_MEMBER',
+      entity_type: 'USER',
+      entity_id: fm.user_id,
+      remarks: `Resident ${req.user.name} removed family member ${fm.full_name}`,
+    });
+
+    res.json({ success: true, message: `Family member '${fm.full_name}' removed.` });
+  } catch (err) {
+    console.error('Error deleting family member:', err);
+    res.status(500).json({ success: false, message: 'Failed to remove family member.' });
+  }
+}
+
 module.exports = {
   createRegistration,
   updateApproval,
@@ -1107,4 +1213,6 @@ module.exports = {
   getPublicPassDetails,
   getQrCodePngImage,
   getResidentFamilyMembers,
+  addResidentFamilyMember,
+  deleteResidentFamilyMember,
 };

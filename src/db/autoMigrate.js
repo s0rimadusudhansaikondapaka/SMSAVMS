@@ -52,24 +52,27 @@ async function runAutoMigrations() {
       }
     }
 
-    // 1. Audit Logs Columns
+    // 1. Audit Logs Columns & GUID
     await db.query(`
       ALTER TABLE audit_logs 
+      ADD COLUMN IF NOT EXISTS guid VARCHAR(64),
       ADD COLUMN IF NOT EXISTS actor_name VARCHAR(150),
       ADD COLUMN IF NOT EXISTS actor_role VARCHAR(50),
       ADD COLUMN IF NOT EXISTS ip_address VARCHAR(100),
       ADD COLUMN IF NOT EXISTS status VARCHAR(20);
     `);
 
-    // 2. Visitors Table Columns
+    // 2. Visitors Table Columns & GUID
     await db.query(`
       ALTER TABLE visitors 
+      ADD COLUMN IF NOT EXISTS guid VARCHAR(64),
       ADD COLUMN IF NOT EXISTS company_name VARCHAR(255);
     `);
 
-    // 3. Registrations Table Columns
+    // 3. Registrations Table Columns & GUID
     await db.query(`
       ALTER TABLE registrations 
+      ADD COLUMN IF NOT EXISTS guid VARCHAR(64),
       ADD COLUMN IF NOT EXISTS approved_by_user_id INTEGER,
       ADD COLUMN IF NOT EXISTS approved_by_name VARCHAR(150),
       ADD COLUMN IF NOT EXISTS approved_by_role VARCHAR(50),
@@ -82,16 +85,31 @@ async function runAutoMigrations() {
       CREATE TABLE IF NOT EXISTS resident_family_members (
         id SERIAL PRIMARY KEY,
         resident_id INT,
+        user_id INT,
         full_name VARCHAR(255),
         relationship VARCHAR(100),
         phone VARCHAR(50),
+        email VARCHAR(150),
+        age INT,
+        gender VARCHAR(20),
         photo_url TEXT,
         id_card_number VARCHAR(100),
-        is_pro_approved BOOLEAN,
+        is_active BOOLEAN DEFAULT true,
+        is_pro_approved BOOLEAN DEFAULT true,
         pro_approved_by INT,
         pro_approved_at TIMESTAMP,
-        created_at TIMESTAMP
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
+
+      ALTER TABLE resident_family_members 
+      ADD COLUMN IF NOT EXISTS user_id INT,
+      ADD COLUMN IF NOT EXISTS email VARCHAR(150),
+      ADD COLUMN IF NOT EXISTS age INT,
+      ADD COLUMN IF NOT EXISTS gender VARCHAR(20),
+      ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true;
+
+      ALTER TABLE users 
+      ADD COLUMN IF NOT EXISTS primary_resident_id INT;
     `);
 
     // 5. System Settings Table
@@ -216,6 +234,25 @@ async function runAutoMigrations() {
         }
       } catch (e) {}
     }
+
+    // 8. Backfill GUIDs for all entities where guid is NULL or empty
+    try {
+      await db.query(`
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS guid VARCHAR(64);
+        ALTER TABLE visitors ADD COLUMN IF NOT EXISTS guid VARCHAR(64);
+        ALTER TABLE registrations ADD COLUMN IF NOT EXISTS guid VARCHAR(64);
+        ALTER TABLE gate_logs ADD COLUMN IF NOT EXISTS guid VARCHAR(64);
+        ALTER TABLE resident_family_members ADD COLUMN IF NOT EXISTS guid VARCHAR(64);
+        ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS guid VARCHAR(64);
+
+        UPDATE users SET guid = 'USR-' || UPPER(SUBSTRING(MD5(id::text || name || random()::text) FROM 1 FOR 12)) WHERE guid IS NULL OR guid = '';
+        UPDATE visitors SET guid = 'VIS-' || UPPER(SUBSTRING(MD5(id::text || full_name || random()::text) FROM 1 FOR 12)) WHERE guid IS NULL OR guid = '';
+        UPDATE registrations SET guid = 'REG-' || UPPER(SUBSTRING(MD5(id::text || pass_code || random()::text) FROM 1 FOR 12)) WHERE guid IS NULL OR guid = '';
+        UPDATE gate_logs SET guid = 'GLOG-' || UPPER(SUBSTRING(MD5(id::text || random()::text) FROM 1 FOR 12)) WHERE guid IS NULL OR guid = '';
+        UPDATE resident_family_members SET guid = 'FM-' || UPPER(SUBSTRING(MD5(id::text || full_name || random()::text) FROM 1 FOR 12)) WHERE guid IS NULL OR guid = '';
+        UPDATE audit_logs SET guid = 'AUD-' || UPPER(SUBSTRING(MD5(id::text || random()::text) FROM 1 FOR 12)) WHERE guid IS NULL OR guid = '';
+      `);
+    } catch (gErr) {}
 
     console.log('[AutoMigration] All DB auto-migrations and seeds completed successfully!');
     return true;

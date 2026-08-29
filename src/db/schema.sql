@@ -1,5 +1,5 @@
 -- Exported UAT Schema DDL
--- Generated on 2026-08-29T06:28:33.245Z
+-- Generated on 2026-08-29T12:16:55.981Z
 
 CREATE TABLE IF NOT EXISTS approvers_config (
   id SERIAL PRIMARY KEY,
@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   actor_name VARCHAR(150),
   actor_role VARCHAR(50),
   ip_address VARCHAR(100),
-  status VARCHAR(20) DEFAULT 'SUCCESS'::character varying
+  status VARCHAR(20) DEFAULT 'SUCCESS'::character varying,
+  guid VARCHAR(64)
 );
 
 CREATE TABLE IF NOT EXISTS departments (
@@ -46,6 +47,16 @@ CREATE TABLE IF NOT EXISTS gate_category_rules (
   gate_name VARCHAR(50),
   visitor_category VARCHAR(50),
   is_allowed BOOLEAN,
+  updated_at TIMESTAMP WITHOUT TIME ZONE,
+  direction_mode VARCHAR(50) DEFAULT 'BOTH'::character varying,
+  allow_in BOOLEAN DEFAULT true,
+  allow_out BOOLEAN DEFAULT true
+);
+
+CREATE TABLE IF NOT EXISTS gate_direction_config (
+  gate_name VARCHAR(100),
+  direction_mode VARCHAR(50),
+  is_active BOOLEAN,
   updated_at TIMESTAMP WITHOUT TIME ZONE
 );
 
@@ -64,7 +75,8 @@ CREATE TABLE IF NOT EXISTS gate_logs (
   vehicle_no VARCHAR(50),
   recorded_by_guard_id INTEGER,
   timestamp TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-  remarks TEXT
+  remarks TEXT,
+  guid VARCHAR(64)
 );
 
 CREATE TABLE IF NOT EXISTS invite_tokens (
@@ -128,7 +140,8 @@ CREATE TABLE IF NOT EXISTS registrations (
   approved_by_name VARCHAR(150),
   approved_by_role VARCHAR(50),
   family_member_id INTEGER,
-  relationship_to_resident VARCHAR(100)
+  relationship_to_resident VARCHAR(100),
+  guid VARCHAR(64)
 );
 
 CREATE TABLE IF NOT EXISTS resident_absences (
@@ -153,7 +166,13 @@ CREATE TABLE IF NOT EXISTS resident_family_members (
   created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
   is_pro_approved BOOLEAN DEFAULT false,
   pro_approved_by INTEGER,
-  pro_approved_at TIMESTAMP WITHOUT TIME ZONE
+  pro_approved_at TIMESTAMP WITHOUT TIME ZONE,
+  guid VARCHAR(64),
+  user_id INTEGER,
+  email VARCHAR(150),
+  age INTEGER,
+  gender VARCHAR(20),
+  is_active BOOLEAN DEFAULT true
 );
 
 CREATE TABLE IF NOT EXISTS system_settings (
@@ -169,7 +188,6 @@ CREATE TABLE IF NOT EXISTS users (
   email VARCHAR(150) NOT NULL,
   phone VARCHAR(20) NOT NULL,
   role VARCHAR(50) NOT NULL,
-  user_type VARCHAR(50) DEFAULT 'RESIDENT',
   residency_status VARCHAR(50) NOT NULL,
   department_id INTEGER,
   password_hash VARCHAR(255) NOT NULL,
@@ -179,7 +197,9 @@ CREATE TABLE IF NOT EXISTS users (
   gender VARCHAR(20) DEFAULT 'Male'::character varying,
   profile_photo_url TEXT,
   flat_info VARCHAR(100),
-  created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  user_type VARCHAR(50) DEFAULT 'RESIDENT'::character varying,
+  primary_resident_id INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS visitors (
@@ -199,5 +219,6 @@ CREATE TABLE IF NOT EXISTS visitors (
   is_frequent_visitor BOOLEAN DEFAULT false,
   has_smartphone BOOLEAN DEFAULT true,
   created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-  company_name VARCHAR(255)
+  company_name VARCHAR(255),
+  guid VARCHAR(64)
 );

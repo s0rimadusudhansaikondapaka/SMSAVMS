@@ -16,7 +16,9 @@ const {
   generateInviteToken,
   getPublicPassDetails,
   getQrCodePngImage,
-  getResidentFamilyMembers
+  getResidentFamilyMembers,
+  addResidentFamilyMember,
+  deleteResidentFamilyMember
 } = require('../controllers/visitorController');
 const { 
   verifyGatePass, 
@@ -307,6 +309,8 @@ router.post('/registrations', authenticateToken, createRegistration);
  */
 router.put('/registrations/:id', authenticateToken, updateRegistration);
 router.get('/visitors/family-members', authenticateToken, getResidentFamilyMembers);
+router.post('/visitors/family-members', authenticateToken, addResidentFamilyMember);
+router.delete('/visitors/family-members/:id', authenticateToken, deleteResidentFamilyMember);
 
 /**
  * @openapi
