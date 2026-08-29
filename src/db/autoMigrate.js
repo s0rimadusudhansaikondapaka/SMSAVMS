@@ -73,15 +73,23 @@ async function runAutoMigrations() {
       );
     `);
 
-    // 7. Gate Category Rules Table
+    // 7. Gate Category Rules Table & Direction Columns
     await db.query(`
       CREATE TABLE IF NOT EXISTS gate_category_rules (
         id SERIAL PRIMARY KEY,
         gate_name VARCHAR(100),
         visitor_category VARCHAR(50),
         is_allowed BOOLEAN,
+        direction_mode VARCHAR(50) DEFAULT 'BOTH',
+        allow_in BOOLEAN DEFAULT true,
+        allow_out BOOLEAN DEFAULT true,
         updated_at TIMESTAMP
       );
+
+      ALTER TABLE gate_category_rules 
+      ADD COLUMN IF NOT EXISTS direction_mode VARCHAR(50) DEFAULT 'BOTH',
+      ADD COLUMN IF NOT EXISTS allow_in BOOLEAN DEFAULT true,
+      ADD COLUMN IF NOT EXISTS allow_out BOOLEAN DEFAULT true;
     `);
 
     // 8. Gate Direction Config Table (IN/OUT states configurable by Super Admin)

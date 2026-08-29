@@ -297,13 +297,33 @@ async function getGateCategoryRules(req, res) {
   }
 }
 
-// Update/toggle gatewise category rule (Super Admin)
+// Update/toggle gatewise category IN/OUT direction rule (Super Admin)
 async function toggleGateCategoryRule(req, res) {
-  const { gate_name, visitor_category, is_allowed } = req.body;
+  const { gate_name, visitor_category, is_allowed, direction_mode, allow_in, allow_out } = req.body;
 
-  if (!gate_name || !visitor_category || is_allowed === undefined) {
-    return res.status(400).json({ success: false, message: 'gate_name, visitor_category, and is_allowed are required.' });
+  if (!gate_name || !visitor_category) {
+    return res.status(400).json({ success: false, message: 'gate_name and visitor_category are required.' });
   }
+
+  let finalMode = direction_mode;
+  if (!finalMode) {
+    if (allow_in !== undefined || allow_out !== undefined) {
+      const inVal = allow_in !== undefined ? Boolean(allow_in) : true;
+      const outVal = allow_out !== undefined ? Boolean(allow_out) : true;
+      if (inVal && outVal) finalMode = 'BOTH';
+      else if (inVal && !outVal) finalMode = 'IN_ONLY';
+      else if (!inVal && outVal) finalMode = 'OUT_ONLY';
+      else finalMode = 'DISABLED';
+    } else if (is_allowed !== undefined) {
+      finalMode = is_allowed ? 'BOTH' : 'DISABLED';
+    } else {
+      finalMode = 'BOTH';
+    }
+  }
+
+  const isAllowedBool = finalMode !== 'DISABLED';
+  const allowInBool = finalMode === 'BOTH' || finalMode === 'IN_ONLY';
+  const allowOutBool = finalMode === 'BOTH' || finalMode === 'OUT_ONLY';
 
   try {
     const existing = await db.query(
@@ -313,26 +333,41 @@ async function toggleGateCategoryRule(req, res) {
 
     if (existing.rows.length > 0) {
       await db.query(
-        `UPDATE gate_category_rules SET is_allowed = $1, updated_at = CURRENT_TIMESTAMP WHERE gate_name = $2 AND visitor_category = $3`,
-        [is_allowed, gate_name, visitor_category]
+        `UPDATE gate_category_rules 
+         SET is_allowed = $1, direction_mode = $2, allow_in = $3, allow_out = $4, updated_at = CURRENT_TIMESTAMP 
+         WHERE gate_name = $5 AND visitor_category = $6`,
+        [isAllowedBool, finalMode, allowInBool, allowOutBool, gate_name, visitor_category]
       );
     } else {
       await db.query(
-        `INSERT INTO gate_category_rules (gate_name, visitor_category, is_allowed, updated_at) VALUES ($1, $2, $3, CURRENT_TIMESTAMP)`,
-        [gate_name, visitor_category, is_allowed]
+        `INSERT INTO gate_category_rules (gate_name, visitor_category, is_allowed, direction_mode, allow_in, allow_out, updated_at) 
+         VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)`,
+        [gate_name, visitor_category, isAllowedBool, finalMode, allowInBool, allowOutBool]
       );
     }
 
     await db.query(
       `INSERT INTO audit_logs (actor_id, action, entity_type, remarks) VALUES ($1, $2, $3, $4)`,
-      [req.user.id, 'UPDATE_GATE_CATEGORY_RULE', 'GATE_RULE', `Super Admin ${req.user.name} set category '${visitor_category}' at gate '${gate_name}' to ${is_allowed ? 'ALLOWED' : 'DISABLED'}`]
+      [
+        req.user.id,
+        'UPDATE_GATE_CATEGORY_RULE',
+        'GATE_RULE',
+        `Super Admin ${req.user.name} set category '${visitor_category}' at gate '${gate_name}' to direction state '${finalMode}' (IN: ${allowInBool}, OUT: ${allowOutBool})`,
+      ]
     );
 
-    broadcastSyncEvent('GATE_RULE_UPDATED', { gate_name, visitor_category, is_allowed, updated_by: req.user.name });
+    broadcastSyncEvent('GATE_RULE_UPDATED', {
+      gate_name,
+      visitor_category,
+      direction_mode: finalMode,
+      allow_in: allowInBool,
+      allow_out: allowOutBool,
+      updated_by: req.user.name,
+    });
 
     res.json({
       success: true,
-      message: `Category '${visitor_category}' at gate '${gate_name}' updated to ${is_allowed ? 'ALLOWED' : 'DISABLED'}.`,
+      message: `Category '${visitor_category}' at gate '${gate_name}' updated to ${finalMode}.`,
     });
   } catch (err) {
     console.error('Error updating gate category rule:', err);
