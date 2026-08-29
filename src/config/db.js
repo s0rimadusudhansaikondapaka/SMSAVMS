@@ -60,6 +60,13 @@ async function initDb() {
     } catch (sErr) {
       console.error('[PostgreSQL DB Error] Error seeding embedded PostgreSQL engine:', sErr);
     }
+    // Trigger safe idempotent auto-migrations
+    try {
+      const runAutoMigrations = require('../db/autoMigrate');
+      await runAutoMigrations();
+    } catch (mErr) {
+      console.error('[PostgreSQL DB Error] Error executing auto-migrations:', mErr);
+    }
   }
   return pool;
 }

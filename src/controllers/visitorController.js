@@ -312,7 +312,7 @@ async function updateApproval(req, res) {
 
   try {
     const regRes = await db.query(
-      `SELECT r.*, v.full_name as visitor_name, v.phone as visitor_phone 
+      `SELECT r.*, v.full_name as visitor_name, v.phone as visitor_phone, v.email as visitor_email 
        FROM registrations r 
        JOIN visitors v ON r.visitor_id = v.id 
        WHERE r.id = $1`,
@@ -406,6 +406,14 @@ async function updateApproval(req, res) {
       qrCodeUrl = await QRCode.toDataURL(qrData);
     }
 
+    const parsedValidFrom = (valid_from && !isNaN(new Date(valid_from).getTime())) ? new Date(valid_from) : null;
+    const parsedValidUntil = (valid_until && !isNaN(new Date(valid_until).getTime())) ? new Date(valid_until) : null;
+
+    const isApprovedOrPending = newStatus === 'APPROVED' || (newStatus && newStatus.startsWith('PENDING'));
+    const approvedUserId = isApprovedOrPending ? req.user.id : null;
+    const approvedUserName = isApprovedOrPending ? req.user.name : null;
+    const approvedUserRole = isApprovedOrPending ? req.user.role : null;
+
     await db.query(
       `UPDATE registrations 
        SET status = $1, 
@@ -415,9 +423,9 @@ async function updateApproval(req, res) {
            visit_type = COALESCE($5, visit_type),
            valid_from = COALESCE($6, valid_from),
            valid_until = COALESCE($7, valid_until),
-           approved_by_user_id = CASE WHEN $1 = 'APPROVED' OR $1 LIKE 'PENDING%' THEN $9 ELSE approved_by_user_id END,
-           approved_by_name = CASE WHEN $1 = 'APPROVED' OR $1 LIKE 'PENDING%' THEN $10 ELSE approved_by_name END,
-           approved_by_role = CASE WHEN $1 = 'APPROVED' OR $1 LIKE 'PENDING%' THEN $11 ELSE approved_by_role END
+           approved_by_user_id = COALESCE($9, approved_by_user_id),
+           approved_by_name = COALESCE($10, approved_by_name),
+           approved_by_role = COALESCE($11, approved_by_role)
        WHERE id = $8`,
       [
         newStatus, 
@@ -425,12 +433,12 @@ async function updateApproval(req, res) {
         reg.stay_required && req.user.role === 'HOD', 
         priority || null,
         visit_type || null,
-        valid_from ? new Date(valid_from) : null,
-        valid_until ? new Date(valid_until) : null,
+        parsedValidFrom,
+        parsedValidUntil,
         registration_id,
-        req.user.id,
-        req.user.name,
-        req.user.role
+        approvedUserId,
+        approvedUserName,
+        approvedUserRole
       ]
     );
 
@@ -466,8 +474,8 @@ async function updateApproval(req, res) {
         visitorEmail: reg.visitor_email,
         visitorName: reg.visitor_name,
         passCode: reg.pass_code,
-        validFrom: reg.valid_from,
-        validUntil: reg.valid_until,
+        validFrom: parsedValidFrom || reg.valid_from,
+        validUntil: parsedValidUntil || reg.valid_until,
         hostName: req.user.name,
       });
     }
@@ -480,7 +488,7 @@ async function updateApproval(req, res) {
     });
   } catch (err) {
     console.error('Error updating approval:', err);
-    res.status(500).json({ success: false, message: 'Failed to update approval.' });
+    res.status(500).json({ success: false, message: err.message || 'Failed to update approval.' });
   }
 }
 
