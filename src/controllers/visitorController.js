@@ -1044,6 +1044,36 @@ async function getQrCodePngImage(req, res) {
   }
 }
 
+// Get Resident's Family Members & Pass Statuses
+async function getResidentFamilyMembers(req, res) {
+  try {
+    const residentId = req.user.id;
+    const result = await db.query(
+      `SELECT rfm.*, 
+              latest_reg.pass_code as latest_pass_code,
+              latest_reg.status as latest_pass_status,
+              latest_reg.valid_from as latest_valid_from,
+              latest_reg.valid_until as latest_valid_until,
+              latest_reg.id as latest_registration_id
+       FROM resident_family_members rfm
+       LEFT JOIN LATERAL (
+         SELECT id, pass_code, status, valid_from, valid_until 
+         FROM registrations 
+         WHERE family_member_id = rfm.id OR (host_id = rfm.resident_id AND relationship_to_resident = rfm.relationship)
+         ORDER BY id DESC LIMIT 1
+       ) latest_reg ON true
+       WHERE rfm.resident_id = $1
+       ORDER BY rfm.id DESC`,
+      [residentId]
+    );
+
+    res.json({ success: true, family_members: result.rows });
+  } catch (err) {
+    console.error('Error fetching resident family members:', err);
+    res.status(500).json({ success: false, message: 'Failed to fetch family members.' });
+  }
+}
+
 module.exports = {
   createRegistration,
   updateApproval,
@@ -1057,4 +1087,5 @@ module.exports = {
   generateInviteToken,
   getPublicPassDetails,
   getQrCodePngImage,
+  getResidentFamilyMembers,
 };

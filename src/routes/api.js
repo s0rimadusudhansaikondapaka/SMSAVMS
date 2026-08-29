@@ -15,7 +15,8 @@ const {
   createPublicVisitorRegistration,
   generateInviteToken,
   getPublicPassDetails,
-  getQrCodePngImage
+  getQrCodePngImage,
+  getResidentFamilyMembers
 } = require('../controllers/visitorController');
 const { 
   verifyGatePass, 
@@ -302,6 +303,7 @@ router.post('/registrations', authenticateToken, createRegistration);
  *         description: Cannot edit registration after approval
  */
 router.put('/registrations/:id', authenticateToken, updateRegistration);
+router.get('/visitors/family-members', authenticateToken, getResidentFamilyMembers);
 
 /**
  * @openapi
