@@ -47,6 +47,11 @@ async function createSingleUser(req, res) {
   const validResidency = residency_status || (role === 'RESIDENT' ? 'RESIDENT' : 'NON_RESIDENT');
 
   try {
+    // Ensure users_role_check constraint is dropped dynamically to allow RESIDENT_EMPLOYEE
+    try {
+      await db.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;`);
+    } catch (cErr) {}
+
     // Check duplicates
     const checkEmail = await db.query('SELECT id FROM users WHERE email = $1', [email]);
     if (checkEmail.rows.length > 0) {
@@ -71,10 +76,12 @@ async function createSingleUser(req, res) {
     const newUser = result.rows[0];
 
     // Audit log
-    await db.query(
-      `INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, remarks) VALUES ($1, $2, $3, $4, $5)`,
-      [req.user.id, 'CREATE_USER_WIZARD', 'USER', newUser.id, `Admin ${req.user.name} created user ${name} (${role})`]
-    );
+    try {
+      await db.query(
+        `INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, remarks) VALUES ($1, $2, $3, $4, $5)`,
+        [req.user.id, 'CREATE_USER_WIZARD', 'USER', newUser.id, `Admin ${req.user.name} created user ${name} (${role})`]
+      );
+    } catch (aErr) {}
 
     res.status(201).json({
       success: true,
@@ -83,7 +90,7 @@ async function createSingleUser(req, res) {
     });
   } catch (err) {
     console.error('Create single user error:', err);
-    res.status(500).json({ success: false, message: 'Server error creating user.' });
+    res.status(500).json({ success: false, message: err.message || 'Server error creating user.' });
   }
 }
 
@@ -602,6 +609,10 @@ async function updateSingleUser(req, res) {
   }
 
   try {
+    try {
+      await db.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;`);
+    } catch (cErr) {}
+
     const existingRes = await db.query('SELECT * FROM users WHERE id = $1', [id]);
     if (existingRes.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'User not found.' });

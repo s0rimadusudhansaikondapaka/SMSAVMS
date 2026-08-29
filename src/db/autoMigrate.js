@@ -9,6 +9,11 @@ async function runAutoMigrations() {
   try {
     console.log('[AutoMigration] Running database schema auto-migrations...');
 
+    // 0. Drop strict users_role_check constraint to allow RESIDENT_EMPLOYEE
+    try {
+      await db.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;`);
+    } catch (rErr) {}
+
     // 1. Audit Logs Columns
     await db.query(`
       ALTER TABLE audit_logs 

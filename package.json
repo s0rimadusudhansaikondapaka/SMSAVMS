@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/app.js",
     "dev": "node --watch src/app.js",
-    "seed": "node src/db/seedRunner.js"
+    "seed": "node src/db/seedRunner.js",
+    "sync-uat-db": "node src/db/syncUatToLocal.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
