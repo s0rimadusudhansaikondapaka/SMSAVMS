@@ -474,6 +474,12 @@ async function processL2ApprovalByAdmin(req, res) {
       success: true,
       message: `Pass ${regRes.rows[0].pass_code} successfully ${newStatus} by Super Admin.`,
     });
+  } catch (err) {
+    console.error('Error processing L2 approval by Admin:', err);
+    res.status(500).json({ success: false, message: 'Failed to process L2 approval.' });
+  }
+}
+
 // Get all gate direction / In-Out state configurations (Super Admin & Gate Terminal)
 async function getGateDirectionConfig(req, res) {
   try {
@@ -527,6 +533,9 @@ async function updateGateDirectionConfig(req, res) {
   } catch (err) {
     console.error('Error updating gate direction config:', err);
     res.status(500).json({ success: false, message: 'Failed to update gate direction config.' });
+  }
+}
+
 // Update User Details & Registration Status (Super Admin)
 async function updateSingleUser(req, res) {
   const { id } = req.params;
