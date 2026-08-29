@@ -346,8 +346,8 @@ async function updateApproval(req, res) {
           const hostRes = await db.query('SELECT role, residency_status, department_id FROM users WHERE id = $1', [reg.host_id]);
           if (hostRes.rows.length > 0) {
             const h = hostRes.rows[0];
-            isHostResident = h.role === 'RESIDENT' || h.residency_status === 'RESIDENT';
-            isHostEmployee = h.role === 'EMPLOYEE' || h.role === 'HOD';
+            isHostResident = h.role === 'RESIDENT' || h.role === 'RESIDENT_EMPLOYEE' || h.residency_status === 'RESIDENT';
+            isHostEmployee = h.role === 'EMPLOYEE' || h.role === 'RESIDENT_EMPLOYEE' || h.role === 'HOD';
             hostDeptId = h.department_id;
           }
         }

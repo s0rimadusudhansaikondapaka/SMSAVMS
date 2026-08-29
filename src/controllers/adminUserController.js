@@ -39,7 +39,7 @@ async function createSingleUser(req, res) {
     return res.status(400).json({ success: false, message: 'Name, email, phone, and role are required.' });
   }
 
-  const validRoles = ['RESIDENT', 'EMPLOYEE', 'HOD', 'GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'];
+  const validRoles = ['RESIDENT', 'EMPLOYEE', 'RESIDENT_EMPLOYEE', 'HOD', 'PRO', 'GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'];
   if (!validRoles.includes(role)) {
     return res.status(400).json({ success: false, message: `Invalid role. Must be one of: ${validRoles.join(', ')}` });
   }
