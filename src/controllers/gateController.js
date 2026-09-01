@@ -492,7 +492,7 @@ async function getGatewiseStatsAndSelfRegistered(req, res) {
          COUNT(*) FILTER (WHERE direction = 'IN') as in_count,
          COUNT(*) FILTER (WHERE direction = 'OUT') as out_count
        FROM gate_logs
-       WHERE gate_name = $1 AND timestamp >= CURRENT_DATE`,
+       WHERE gate_name = $1 AND timestamp >= CAST(CURRENT_DATE AS TIMESTAMP)`,
       [gateName]
     );
 
