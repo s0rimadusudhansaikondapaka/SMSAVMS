@@ -2,6 +2,20 @@ const db = require('../config/db');
 const { broadcastSyncEvent } = require('../sockets/syncServer');
 const { logSystemAction } = require('../services/auditLogger');
 
+function isPermanentPass(reg) {
+  if (!reg) return false;
+  if (reg.is_permanent_pass === true) return true;
+  const pCode = String(reg.pass_code || '').toUpperCase();
+  if (pCode.startsWith('MAID-PERM') || pCode.startsWith('DEVOTEE-PERM') || pCode.startsWith('FAM-PERM') || pCode.startsWith('HOST-') || pCode.startsWith('PERM-')) {
+    return true;
+  }
+  const category = String(reg.visitor_category || '').toUpperCase();
+  if (['MAID', 'CARETAKER', 'DEVOTEE', 'FREQUENT_VISITOR', 'FAMILY_MEMBER'].includes(category)) {
+    return true;
+  }
+  return false;
+}
+
 // 1. Lookup Registration by Passcode, QR Code Hash, Phone Number, or Vehicle No
 async function verifyGatePass(req, res) {
   const { query } = req.query; // passcode, qr content, phone number, or vehicle_no
@@ -42,19 +56,18 @@ async function verifyGatePass(req, res) {
               v.full_name as visitor_name, v.phone as visitor_phone, v.email as visitor_email, v.gender as visitor_gender,
               v.photo_url, v.id_type, v.id_number, v.id_card_number, v.id_card_image_url, v.visitor_category, v.company_name, v.is_frequent_visitor, v.has_smartphone,
               u.name as host_name, u.phone as host_phone, u.flat_info as host_flat_info, u.role as host_role,
-              rfm.relationship as family_relationship,
-              app_user.name as audit_approver_name, app_user.role as audit_approver_role
+              rfm.relationship as family_relationship
        FROM registrations r 
        JOIN visitors v ON r.visitor_id = v.id 
        LEFT JOIN users u ON r.host_id = u.id 
        LEFT JOIN resident_family_members rfm ON r.family_member_id = rfm.id
-       LEFT JOIN LATERAL (
-         SELECT actor_id FROM audit_logs 
-         WHERE entity_id = r.id AND (action LIKE '%APPROVE%' OR action LIKE '%CREATE%') 
-         ORDER BY id DESC LIMIT 1
-       ) app_log ON true
-       LEFT JOIN users app_user ON app_log.actor_id = app_user.id
-       WHERE LOWER(r.pass_code) = LOWER($1) OR LOWER(v.vehicle_no) = LOWER($1) OR v.phone = $1 OR CAST(r.id AS TEXT) = $1
+       LEFT JOIN registration_vehicles rv ON rv.registration_id = r.id
+       WHERE LOWER(r.pass_code) = LOWER($1) 
+          OR LOWER(COALESCE(r.guid, '')) = LOWER($1) 
+          OR LOWER(COALESCE(v.vehicle_no, '')) = LOWER($1) 
+          OR LOWER(COALESCE(rv.plate_number, '')) = LOWER($1)
+          OR v.phone = $1 
+          OR CAST(r.id AS TEXT) = $1
        ORDER BY r.created_at DESC LIMIT 1`,
       [cleanQuery]
     );
@@ -64,10 +77,24 @@ async function verifyGatePass(req, res) {
     }
 
     const reg = result.rows[0];
+
+    let auditApproverName = null;
+    let auditApproverRole = null;
+    try {
+      const appLog = await db.query(
+        `SELECT u.name, u.role FROM audit_logs al JOIN users u ON al.actor_id = u.id WHERE al.entity_id = $1 AND (al.action LIKE '%APPROVE%' OR al.action LIKE '%CREATE%') ORDER BY al.id DESC LIMIT 1`,
+        [reg.id]
+      );
+      if (appLog.rows.length > 0) {
+        auditApproverName = appLog.rows[0].name;
+        auditApproverRole = appLog.rows[0].role;
+      }
+    } catch (e) {}
+
     reg.approved_by_display = reg.approved_by_name 
       ? `${reg.approved_by_name} (${reg.approved_by_role || 'Approver'})` 
-      : reg.audit_approver_name 
-      ? `${reg.audit_approver_name} (${reg.audit_approver_role || 'Approver'})` 
+      : auditApproverName 
+      ? `${auditApproverName} (${auditApproverRole || 'Approver'})` 
       : reg.bypassed_by_admin 
       ? 'Super Admin (Direct Auto-Approve)' 
       : reg.host_name 
@@ -114,29 +141,33 @@ async function verifyGatePass(req, res) {
     // Privacy Masking: Mask host phone for standard guards
     const maskedHostPhone = reg.host_phone ? reg.host_phone.replace(/(\+\d{2}\s?\d{2})\d{4}(\d{4})/, '$1****$2') : '';
 
-    // 8-Hour Time Window Grace Period Calculation
+    // 8-Hour Time Window Grace Period Calculation (Permanent passes are valid 24/7 unlimited)
+    const isPerm = isPermanentPass(reg);
     const graceHours = await getGraceHoursWindow();
     const now = new Date();
     const validFrom = new Date(reg.valid_from);
     const validUntil = new Date(reg.valid_until);
 
-    const earliestAllowedEntry = new Date(validFrom.getTime() - graceHours * 60 * 60 * 1000);
-    const latestAllowedEntry = new Date(validFrom.getTime() + graceHours * 60 * 60 * 1000);
-    const overstayThreshold = new Date(validUntil.getTime() + graceHours * 60 * 60 * 1000);
+    const windowStart = new Date(validFrom.getTime() - graceHours * 60 * 60 * 1000);
+    const windowEnd = new Date(validUntil.getTime() + graceHours * 60 * 60 * 1000);
 
     let arrivalStatus = 'VALID_FOR_ENTRY';
-    let arrivalMessage = `Pass valid for entry (Within ${graceHours}h arrival window)`;
+    let arrivalMessage = isPerm
+      ? 'Permanent Multi-Entry Passcard - Valid 24/7 for unlimited entry & exit'
+      : `Pass valid for entry (Allowed from ${graceHours}h before arrival until ${graceHours}h after departure)`;
 
-    if (now < earliestAllowedEntry) {
-      arrivalStatus = 'TOO_EARLY';
-      arrivalMessage = `⛔ Pass Arrival Window Not Open. Earliest entry: ${earliestAllowedEntry.toLocaleString()}`;
-    } else if (now > latestAllowedEntry && reg.status !== 'INSIDE_CAMPUS' && reg.status !== 'CHECKED_OUT') {
-      arrivalStatus = 'ARRIVAL_EXPIRED';
-      arrivalMessage = `⚠️ Pass Arrival Window Expired (Scheduled: ${validFrom.toLocaleString()})`;
+    if (!isPerm) {
+      if (now < windowStart) {
+        arrivalStatus = 'TOO_EARLY';
+        arrivalMessage = `⛔ Pass Arrival Window Not Open. Earliest entry allowed: ${windowStart.toLocaleString()}`;
+      } else if (now > windowEnd && reg.status !== 'INSIDE_CAMPUS' && reg.status !== 'CHECKED_OUT') {
+        arrivalStatus = 'ARRIVAL_EXPIRED';
+        arrivalMessage = `⚠️ Pass Arrival Window Expired (Window ended: ${windowEnd.toLocaleString()})`;
+      }
     }
 
     let egressStatus = 'NORMAL_EXIT';
-    if (reg.status === 'INSIDE_CAMPUS' && now > overstayThreshold) {
+    if (!isPerm && reg.status === 'INSIDE_CAMPUS' && now > windowEnd) {
       egressStatus = 'OVERSTAY';
     }
 
@@ -150,9 +181,9 @@ async function verifyGatePass(req, res) {
         is_current_gate_allowed: isCurrentGateAllowed,
         current_gate_checked: currentGate,
         grace_hours: graceHours,
-        earliest_allowed_entry: earliestAllowedEntry.toISOString(),
-        latest_allowed_entry: latestAllowedEntry.toISOString(),
-        overstay_threshold: overstayThreshold.toISOString(),
+        earliest_allowed_entry: windowStart.toISOString(),
+        latest_allowed_entry: windowEnd.toISOString(),
+        overstay_threshold: windowEnd.toISOString(),
         arrival_status: arrivalStatus,
         arrival_message: arrivalMessage,
         egress_status: egressStatus,
@@ -225,6 +256,7 @@ async function processGateMovement(req, res) {
 
     const reg = regRes.rows[0];
 
+    const isPerm = isPermanentPass(reg);
     const graceHours = await getGraceHoursWindow();
     const now = new Date();
     const validFrom = new Date(reg.valid_from);
@@ -233,18 +265,21 @@ async function processGateMovement(req, res) {
     const windowEnd = new Date(validUntil.getTime() + graceHours * 60 * 60 * 1000);
 
     if (direction === 'IN') {
-      if (reg.status !== 'APPROVED' && reg.status !== 'CHECKED_OUT' && reg.status !== 'INSIDE_CAMPUS' && !reg.is_vvip && !reg.bypassed_by_admin) {
+      if (!isPerm && reg.status !== 'APPROVED' && reg.status !== 'CHECKED_OUT' && reg.status !== 'INSIDE_CAMPUS' && !reg.is_vvip && !reg.bypassed_by_admin) {
         await db.query('ROLLBACK');
         return res.status(400).json({ success: false, message: `Cannot process IN entry. Pass status is ${reg.status}` });
       }
 
-      // Check if current time is within allowed entry to departure end window
-      if (!reg.is_permanent_pass && (now < windowStart || now > windowEnd)) {
-        await db.query('ROLLBACK');
-        return res.status(400).json({
-          success: false,
-          message: `Entry window expired. Re-entry allowed until departure window end (${windowEnd.toLocaleString()}).`,
-        });
+      // Check if current time is within allowed entry to departure end window for non-permanent passes
+      if (!isPerm && (now < windowStart || now > windowEnd)) {
+        const isAuthorizedGuard = ['GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN', 'HOD'].includes(req.user?.role);
+        if (!req.body.override_expired && !isAuthorizedGuard) {
+          await db.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: `Entry window expired. Re-entry allowed until departure window end (${windowEnd.toLocaleString()}).`,
+          });
+        }
       }
     }
 
@@ -255,16 +290,20 @@ async function processGateMovement(req, res) {
     const kidsCount = children_count !== undefined ? parseInt(children_count) : (boysCount + girlsCount);
     const totalCount = menCount + womenCount + boysCount + girlsCount;
 
+    const maxIdRes = await db.query('SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM gate_logs');
+    const nextLogId = parseInt(maxIdRes.rows[0].next_id, 10);
+    const gateLogGuid = `GLOG-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
+
     // Insert Gate Log
     const logRes = await db.query(
-      `INSERT INTO gate_logs (registration_id, visitor_id, gate_name, direction, person_count, adult_men_count, adult_women_count, children_count, boys_count, girls_count, vehicle_no, recorded_by_guard_id, remarks)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
-      [registration_id, reg.visitor_id, gate_name, direction, totalCount, menCount, womenCount, kidsCount, boysCount, girlsCount, vehicle_no || '', req.user.id, remarks || '']
+      `INSERT INTO gate_logs (id, guid, registration_id, visitor_id, gate_name, direction, person_count, adult_men_count, adult_women_count, children_count, boys_count, girls_count, vehicle_no, recorded_by_guard_id, remarks)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *`,
+      [nextLogId, gateLogGuid, registration_id, reg.visitor_id, gate_name, direction, totalCount, menCount, womenCount, kidsCount, boysCount, girlsCount, vehicle_no || '', req.user.id, remarks || '']
     );
 
-    // PPTX Requirement: Permanent Passcodes for Maids/Frequent Visitors reset to APPROVED upon exit for repeated daily entry!
+    // Permanent Passcodes for Maids/Frequent Visitors reset to APPROVED upon exit for repeated daily entry!
     let newStatus = direction === 'IN' ? 'INSIDE_CAMPUS' : 'CHECKED_OUT';
-    if (direction === 'OUT' && reg.is_permanent_pass) {
+    if (direction === 'OUT' && isPerm) {
       newStatus = 'APPROVED'; // Resets to APPROVED so permanent passcode works every day!
     }
 

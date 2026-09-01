@@ -1,5 +1,5 @@
 -- Exported UAT Schema DDL
--- Generated on 2026-08-29T12:16:55.981Z
+-- Generated on 2026-09-01T11:11:31.222Z
 
 CREATE TABLE IF NOT EXISTS approvers_config (
   id SERIAL PRIMARY KEY,

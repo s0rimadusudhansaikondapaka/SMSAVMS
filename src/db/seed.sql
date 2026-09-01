@@ -1,5 +1,5 @@
 -- Exported UAT Data Seed
--- Generated on 2026-08-29T12:16:55.981Z
+-- Generated on 2026-09-01T11:11:31.222Z
 
 INSERT INTO approvers_config (id, host_type, approval_required, approver_role, l2_to_security_head, l2_time_condition_start, l2_time_condition_end, created_at) VALUES
   (1, 'RESIDENT', true, 'RESIDENT_VISITOR_APPROVER', true, '18:00:00', '06:00:00', '2026-08-27T04:18:54.284Z'),
