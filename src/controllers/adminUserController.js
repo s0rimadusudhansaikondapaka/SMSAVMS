@@ -77,34 +77,25 @@ async function createSingleUser(req, res) {
     const parsedDeptId = department_id ? parseInt(department_id, 10) : null;
     const userGuid = `USR-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
 
+    const maxIdRes = await db.query('SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM users');
+    const nextId = parseInt(maxIdRes.rows[0].next_id, 10);
+
     let result;
     const executeInsert = async () => {
       try {
         return await db.query(
-          `INSERT INTO users (guid, name, email, phone, role, user_type, residency_status, department_id, password_hash, flat_info, registration_status)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'ACTIVE')
+          `INSERT INTO users (id, guid, name, email, phone, role, user_type, residency_status, department_id, password_hash, flat_info, registration_status)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'ACTIVE')
            RETURNING id, guid, name, email, phone, role, user_type, residency_status, department_id, flat_info, registration_status, created_at`,
-          [userGuid, name, email, phone, finalRole, finalUserType, validResidency, parsedDeptId, hashedPassword, userAddress]
+          [nextId, userGuid, name, email, phone, finalRole, finalUserType, validResidency, parsedDeptId, hashedPassword, userAddress]
         );
       } catch (insertErr) {
-        if (insertErr.message && (insertErr.message.includes('already exists') || insertErr.message.includes('users_pkey') || insertErr.message.includes('Key (id)='))) {
-          try {
-            await db.query(`SELECT setval(pg_get_serial_sequence('users', 'id'), COALESCE((SELECT MAX(id) FROM users), 1));`);
-          } catch (sErr) {
-            try { await db.query(`SELECT setval('users_id_seq', COALESCE((SELECT MAX(id) FROM users), 1));`); } catch (sErr2) {}
-          }
-          return await db.query(
-            `INSERT INTO users (guid, name, email, phone, role, user_type, residency_status, department_id, password_hash, flat_info, registration_status)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'ACTIVE')
-             RETURNING id, guid, name, email, phone, role, user_type, residency_status, department_id, flat_info, registration_status, created_at`,
-            [userGuid, name, email, phone, finalRole, finalUserType, validResidency, parsedDeptId, hashedPassword, userAddress]
-          );
-        } else if (insertErr.message && (insertErr.message.includes('user_type') || insertErr.message.includes('column'))) {
+        if (insertErr.message && (insertErr.message.includes('user_type') || insertErr.message.includes('column'))) {
           const fallbackRes = await db.query(
-            `INSERT INTO users (guid, name, email, phone, role, residency_status, department_id, password_hash, flat_info, registration_status)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'ACTIVE')
+            `INSERT INTO users (id, guid, name, email, phone, role, residency_status, department_id, password_hash, flat_info, registration_status)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'ACTIVE')
              RETURNING id, guid, name, email, phone, role, residency_status, department_id, flat_info, registration_status, created_at`,
-            [userGuid, name, email, phone, finalRole, validResidency, parsedDeptId, hashedPassword, userAddress]
+            [nextId, userGuid, name, email, phone, finalRole, validResidency, parsedDeptId, hashedPassword, userAddress]
           );
           if (fallbackRes.rows[0]) fallbackRes.rows[0].user_type = finalUserType;
           return fallbackRes;

@@ -1125,11 +1125,15 @@ async function addResidentFamilyMember(req, res) {
     if (checkExistingUser.rows.length > 0) {
       createdUserId = checkExistingUser.rows[0].id;
     } else {
+      const maxIdRes = await db.query('SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM users');
+      const nextId = parseInt(maxIdRes.rows[0].next_id, 10);
+      const familyGuid = `FM-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
+
       const newUserRes = await db.query(
-        `INSERT INTO users (name, email, phone, role, user_type, residency_status, department_id, password_hash, flat_info, registration_status, primary_resident_id)
-         VALUES ($1, $2, $3, 'HOST', 'RESIDENT_FAMILY_MEMBER', 'RESIDENT', $4, $5, $6, 'ACTIVE', $7)
+        `INSERT INTO users (id, guid, name, email, phone, role, user_type, residency_status, department_id, password_hash, flat_info, registration_status, primary_resident_id)
+         VALUES ($1, $2, $3, $4, $5, 'HOST', 'RESIDENT_FAMILY_MEMBER', 'RESIDENT', $6, $7, $8, 'ACTIVE', $9)
          RETURNING id`,
-        [full_name, familyEmail, familyPhone, resident.department_id || null, hashedPassword, resident.flat_info || '', residentId]
+        [nextId, familyGuid, full_name, familyEmail, familyPhone, resident.department_id || null, hashedPassword, resident.flat_info || '', residentId]
       );
       createdUserId = newUserRes.rows[0].id;
     }

@@ -258,12 +258,15 @@ async function registerNewUser(req, res) {
 
     const hashedPassword = await bcrypt.hash('default_password', 10);
     const userEmail = email || `${phone.replace(/[^0-9]/g, '')}@pending.ashram.org`;
+    const maxIdRes = await db.query('SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM users');
+    const nextId = parseInt(maxIdRes.rows[0].next_id, 10);
+    const userGuid = `USR-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
 
     const result = await db.query(
-      `INSERT INTO users (name, email, phone, role, residency_status, password_hash, registration_status)
-       VALUES ($1, $2, $3, 'RESIDENT', 'RESIDENT', $4, 'PENDING_APPROVAL')
-       RETURNING id, name, phone, role, registration_status`,
-      [full_name, userEmail, phone, hashedPassword]
+      `INSERT INTO users (id, guid, name, email, phone, role, user_type, residency_status, password_hash, registration_status)
+       VALUES ($1, $2, $3, $4, $5, 'HOST', 'RESIDENT', 'RESIDENT', $6, 'PENDING_APPROVAL')
+       RETURNING id, guid, name, phone, role, registration_status`,
+      [nextId, userGuid, full_name, userEmail, phone, hashedPassword]
     );
 
     const newUser = result.rows[0];

@@ -32,13 +32,17 @@ async function logSystemAction(req, { action, entity_type = 'GENERAL', entity_id
     const actorRole = req?.user?.role || 'SYSTEM';
     const ipAddress = extractClientIp(req);
 
+    const maxIdRes = await db.query('SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM audit_logs');
+    const nextId = parseInt(maxIdRes.rows[0].next_id, 10);
+    const logGuid = `AUD-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
+
     await db.query(
-      `INSERT INTO audit_logs (actor_id, actor_name, actor_role, action, entity_type, entity_id, ip_address, status, remarks, timestamp)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)`,
-      [actorId, actorName, actorRole, action, entity_type, entity_id, String(ipAddress), status, remarks]
+      `INSERT INTO audit_logs (id, guid, actor_id, actor_name, actor_role, action, entity_type, entity_id, ip_address, status, remarks, timestamp)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)`,
+      [nextId, logGuid, actorId, actorName, actorRole, action, entity_type, entity_id, String(ipAddress), status, remarks]
     );
   } catch (err) {
-    console.error('[Audit Logger Error]: Failed to write audit log:', err);
+    console.error('[Audit Logger Error]: Failed to write audit log:', err.message || err);
   }
 }
 
