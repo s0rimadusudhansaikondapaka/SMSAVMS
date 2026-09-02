@@ -93,11 +93,105 @@ async function createRegistration(req, res) {
       }
     }
 
-    if (host_id) {
-      const hostRes = await db.query('SELECT role FROM users WHERE id = $1', [host_id]);
+function getHostInvitationPermissions(userType, userRole) {
+  const type = (userType || userRole || 'RESIDENT').toUpperCase();
+  const role = (userRole || '').toUpperCase();
+
+  if (['ADMIN', 'SUPERVISOR', 'SECURITY_HEAD', 'GUARD'].includes(role)) {
+    return {
+      canInviteResidence: true, canInviteOffice: true, canInviteVip: true,
+      allowedCategories: ['GENERAL', 'FAMILY_MEMBER', 'VIP', 'VVIP', 'MAID', 'FREQUENT_VISITOR', 'DELIVERY', 'VENDOR', 'FOREIGN_NATIONAL'],
+      allowedVisitTypes: ['HOME', 'OFFICE', 'BHAJAN', 'EVENT', 'TOUR'],
+    };
+  }
+
+  switch (type) {
+    case 'VIP_HOST':
+      return {
+        canInviteResidence: false, canInviteOffice: false, canInviteVip: true,
+        allowedCategories: ['VIP', 'VVIP'],
+        allowedVisitTypes: ['BHAJAN', 'EVENT', 'TOUR', 'OFFICE'],
+      };
+    case 'EMPLOYEE':
+      return {
+        canInviteResidence: false, canInviteOffice: true, canInviteVip: false,
+        allowedCategories: ['GENERAL', 'DELIVERY', 'VENDOR', 'CONTRACTOR', 'FOREIGN_NATIONAL'],
+        allowedVisitTypes: ['OFFICE', 'BHAJAN', 'EVENT'],
+      };
+    case 'RESIDENT':
+      return {
+        canInviteResidence: true, canInviteOffice: false, canInviteVip: false,
+        allowedCategories: ['GENERAL', 'FAMILY_MEMBER', 'MAID', 'FREQUENT_VISITOR', 'FOREIGN_NATIONAL'],
+        allowedVisitTypes: ['HOME', 'BHAJAN', 'EVENT'],
+      };
+    case 'PRO':
+      return {
+        canInviteResidence: true, canInviteOffice: true, canInviteVip: true,
+        allowedCategories: ['GENERAL', 'VIP', 'VVIP', 'VENDOR', 'FOREIGN_NATIONAL'],
+        allowedVisitTypes: ['TOUR', 'OFFICE', 'HOME', 'BHAJAN', 'EVENT'],
+      };
+    case 'RESIDENT_EMPLOYEE':
+      return {
+        canInviteResidence: true, canInviteOffice: true, canInviteVip: false,
+        allowedCategories: ['GENERAL', 'FAMILY_MEMBER', 'MAID', 'FREQUENT_VISITOR', 'DELIVERY', 'VENDOR', 'FOREIGN_NATIONAL'],
+        allowedVisitTypes: ['HOME', 'OFFICE', 'BHAJAN', 'EVENT'],
+      };
+    case 'RESIDENT_VIP_HOST':
+      return {
+        canInviteResidence: true, canInviteOffice: false, canInviteVip: true,
+        allowedCategories: ['GENERAL', 'FAMILY_MEMBER', 'VIP', 'VVIP', 'MAID', 'FREQUENT_VISITOR', 'FOREIGN_NATIONAL'],
+        allowedVisitTypes: ['HOME', 'BHAJAN', 'EVENT', 'TOUR'],
+      };
+    case 'EMPLOYEE_VIP_HOST':
+      return {
+        canInviteResidence: false, canInviteOffice: true, canInviteVip: true,
+        allowedCategories: ['GENERAL', 'VIP', 'VVIP', 'DELIVERY', 'VENDOR', 'FOREIGN_NATIONAL'],
+        allowedVisitTypes: ['OFFICE', 'BHAJAN', 'EVENT', 'TOUR'],
+      };
+    case 'RESIDENT_EMPLOYEE_VIP_HOST':
+      return {
+        canInviteResidence: true, canInviteOffice: true, canInviteVip: true,
+        allowedCategories: ['GENERAL', 'FAMILY_MEMBER', 'VIP', 'VVIP', 'MAID', 'FREQUENT_VISITOR', 'DELIVERY', 'VENDOR', 'FOREIGN_NATIONAL'],
+        allowedVisitTypes: ['HOME', 'OFFICE', 'BHAJAN', 'EVENT', 'TOUR'],
+      };
+    default:
+      return {
+        canInviteResidence: true, canInviteOffice: true, canInviteVip: true,
+        allowedCategories: ['GENERAL', 'FAMILY_MEMBER', 'VIP', 'VVIP', 'MAID', 'FREQUENT_VISITOR', 'DELIVERY', 'VENDOR', 'FOREIGN_NATIONAL'],
+        allowedVisitTypes: ['HOME', 'OFFICE', 'BHAJAN', 'EVENT', 'TOUR'],
+      };
+  }
+}
+
+    if (host_id || req.user?.id) {
+      const activeHostId = host_id || req.user?.id;
+      const hostRes = await db.query('SELECT role, COALESCE(user_type, role) as user_type FROM users WHERE id = $1', [activeHostId]);
       if (hostRes.rows.length > 0) {
         const hostRole = hostRes.rows[0].role;
+        const hostUserType = hostRes.rows[0].user_type;
         
+        const hostPerms = getHostInvitationPermissions(hostUserType, hostRole);
+        const reqCategory = (visitor_category || 'GENERAL').toUpperCase();
+        const reqVisitType = (visit_type || 'HOME').toUpperCase();
+
+        // Validate Category Permission
+        if (!hostPerms.allowedCategories.includes(reqCategory) && !(is_vvip && hostPerms.canInviteVip)) {
+          await db.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: `Host type '${hostUserType}' is not authorized to invite category '${reqCategory}'. Allowed: ${hostPerms.allowedCategories.join(', ')}`,
+          });
+        }
+
+        // Validate Visit Type Permission
+        if (!hostPerms.allowedVisitTypes.includes(reqVisitType)) {
+          await db.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: `Host type '${hostUserType}' is not authorized for visit type '${reqVisitType}'. Allowed: ${hostPerms.allowedVisitTypes.join(', ')}`,
+          });
+        }
+
         // HOD auto-approves office visits
         if (hostRole === 'HOD' && visit_type === 'OFFICE') {
           initialStatus = 'APPROVED';
@@ -729,11 +823,11 @@ async function resolveHostUser(identifier) {
   const str = String(identifier).trim();
   
   if (!isNaN(str) && /^\d+$/.test(str)) {
-    const res = await db.query('SELECT id, name, residency_status, role, email FROM users WHERE id = $1', [parseInt(str)]);
+    const res = await db.query('SELECT id, name, residency_status, role, COALESCE(user_type, role) as user_type, email FROM users WHERE id = $1', [parseInt(str)]);
     if (res.rows.length > 0) return res.rows[0];
   }
 
-  const allUsers = await db.query('SELECT id, name, residency_status, role, email FROM users');
+  const allUsers = await db.query('SELECT id, name, residency_status, role, COALESCE(user_type, role) as user_type, email FROM users');
   for (const u of allUsers.rows) {
     if (generateUserGuid(u) === str || String(u.id) === str) {
       return u;
@@ -786,7 +880,7 @@ async function getPublicHostInfo(req, res) {
     // Check if single-use token
     if (typeof host_id === 'string' && host_id.startsWith('inv_')) {
       const tokenRes = await db.query(
-        `SELECT it.*, u.name, u.residency_status, u.role 
+        `SELECT it.*, u.name, u.residency_status, u.role, COALESCE(u.user_type, u.role) as user_type 
          FROM invite_tokens it 
          JOIN users u ON it.host_id = u.id 
          WHERE it.token = $1`,
@@ -801,13 +895,13 @@ async function getPublicHostInfo(req, res) {
           success: true,
           is_used: true,
           message: 'This invitation link has already been used to submit a visitor registration and is now expired.',
-          host: { id: tok.host_id, name: tok.name, residency_status: tok.residency_status }
+          host: { id: tok.host_id, name: tok.name, residency_status: tok.residency_status, role: tok.role, user_type: tok.user_type }
         });
       }
       return res.json({
         success: true,
         is_used: false,
-        host: { id: tok.host_id, name: tok.name, residency_status: tok.residency_status }
+        host: { id: tok.host_id, name: tok.name, residency_status: tok.residency_status, role: tok.role, user_type: tok.user_type }
       });
     }
 
@@ -858,6 +952,10 @@ async function createPublicVisitorRegistration(req, res) {
 
     const hostUser = await resolveHostUser(host_id);
     const hostNumericId = hostUser ? hostUser.id : 1;
+    const isHostVipOnly = hostUser && (hostUser.user_type === 'VIP_HOST' || hostUser.role === 'VIP_HOST');
+
+    const rawCategory = (req.body.visitor_category || req.body.category || 'GENERAL').toUpperCase();
+    const finalCategory = isHostVipOnly ? (['VIP', 'VVIP'].includes(rawCategory) ? rawCategory : 'VIP') : rawCategory;
 
     await db.query('BEGIN');
 
@@ -865,11 +963,11 @@ async function createPublicVisitorRegistration(req, res) {
     const existing = await db.query('SELECT id FROM visitors WHERE phone = $1', [phone]);
     if (existing.rows.length > 0) {
       visitorId = existing.rows[0].id;
-      await db.query('UPDATE visitors SET full_name = $1, gender = $2, photo_url = COALESCE($3, photo_url) WHERE id = $4', [full_name, gender || 'Male', photo_url || '', visitorId]);
+      await db.query('UPDATE visitors SET full_name = $1, gender = $2, photo_url = COALESCE($3, photo_url), visitor_category = $4 WHERE id = $5', [full_name, gender || 'Male', photo_url || '', finalCategory, visitorId]);
     } else {
       const newV = await db.query(
-        'INSERT INTO visitors (full_name, phone, gender, photo_url) VALUES ($1, $2, $3, $4) RETURNING id',
-        [full_name, phone, gender || 'Male', photo_url || '']
+        'INSERT INTO visitors (full_name, phone, gender, photo_url, visitor_category) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+        [full_name, phone, gender || 'Male', photo_url || '', finalCategory]
       );
       visitorId = newV.rows[0].id;
     }

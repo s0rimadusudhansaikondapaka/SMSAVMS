@@ -92,6 +92,7 @@ async function login(req, res) {
       name: user.name,
       email: user.email,
       role: user.role,
+      user_type: user.user_type || user.role || 'RESIDENT',
       residency_status: user.residency_status,
       department_id: user.department_id,
       department_name: user.department_name,
@@ -104,7 +105,7 @@ async function login(req, res) {
       entity_type: 'USER',
       entity_id: user.id,
       status: 'SUCCESS',
-      remarks: `User ${user.name} (${user.role}) logged in successfully`,
+      remarks: `User ${user.name} (${user.role} - ${user.user_type || 'RESIDENT'}) logged in successfully`,
     });
 
     res.json({
@@ -122,7 +123,7 @@ async function login(req, res) {
 async function getMe(req, res) {
   try {
     const result = await db.query(
-      `SELECT u.id, u.name, u.email, u.phone, u.role, u.residency_status, u.department_id, d.name as department_name 
+      `SELECT u.id, u.name, u.email, u.phone, u.role, COALESCE(u.user_type, u.role) as user_type, u.residency_status, u.department_id, d.name as department_name 
        FROM users u 
        LEFT JOIN departments d ON u.department_id = d.id 
        WHERE u.id = $1`,
@@ -215,6 +216,7 @@ async function verifyOtp(req, res) {
       email: user.email,
       phone: user.phone,
       role: user.role,
+      user_type: user.user_type || user.role || 'RESIDENT',
       residency_status: user.residency_status,
       department_id: user.department_id,
       department_name: user.department_name,

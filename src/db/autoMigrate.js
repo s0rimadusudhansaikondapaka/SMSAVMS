@@ -221,24 +221,41 @@ async function runAutoMigrations() {
       } catch (e) {}
     }
 
-    // 8. Backfill GUIDs for all entities where guid is NULL or empty
-    try {
-      await db.query(`
-        ALTER TABLE users ADD COLUMN IF NOT EXISTS guid VARCHAR(64);
-        ALTER TABLE visitors ADD COLUMN IF NOT EXISTS guid VARCHAR(64);
-        ALTER TABLE registrations ADD COLUMN IF NOT EXISTS guid VARCHAR(64);
-        ALTER TABLE gate_logs ADD COLUMN IF NOT EXISTS guid VARCHAR(64);
-        ALTER TABLE resident_family_members ADD COLUMN IF NOT EXISTS guid VARCHAR(64);
-        ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS guid VARCHAR(64);
+    // 9. Seed default sample accounts for all 8 Host Types + Security/Admin roles
+    const sampleHostUsers = [
+      { name: 'Srinivas Rao (Resident)', email: 'resident1@ashram.org', phone: '+91 9876543210', role: 'HOST', user_type: 'RESIDENT', residency_status: 'RESIDENT', flat_info: 'Flat 302, Sai Residence Block A' },
+      { name: 'Dr. Ananya (Employee Host)', email: 'employee1@ashram.org', phone: '+91 9876543211', role: 'HOST', user_type: 'EMPLOYEE', residency_status: 'NON_RESIDENT', flat_info: 'PBMT Administration Office' },
+      { name: 'Srikar Sharma (VIP Host)', email: 'viphost1@ashram.org', phone: '+91 9876543220', role: 'HOST', user_type: 'VIP_HOST', residency_status: 'RESIDENT', flat_info: 'VIP Guest Relations Office' },
+      { name: 'PRO Office Desk (PRO Host)', email: 'pro1@ashram.org', phone: '+91 9876543221', role: 'PRO', user_type: 'PRO', residency_status: 'RESIDENT', flat_info: 'Public Relations Office (PRO)' },
+      { name: 'Dr. Kumar (Resident + Employee)', email: 'resident_employee1@ashram.org', phone: '+91 9876543222', role: 'HOST', user_type: 'RESIDENT_EMPLOYEE', residency_status: 'RESIDENT', flat_info: 'Annapoorna & Villa 12' },
+      { name: 'Trustee Prasad (Resident + VIP Host)', email: 'resident_vip1@ashram.org', phone: '+91 9876543223', role: 'HOST', user_type: 'RESIDENT_VIP_HOST', residency_status: 'RESIDENT', flat_info: 'Trustee Residence Block A' },
+      { name: 'Director Ramesh (Employee + VIP Host)', email: 'employee_vip1@ashram.org', phone: '+91 9876543224', role: 'HOST', user_type: 'EMPLOYEE_VIP_HOST', residency_status: 'NON_RESIDENT', flat_info: 'Executive Office & VIP Lounge' },
+      { name: 'Ashram Lead Admin (Res + Emp + VIP)', email: 'resident_emp_vip1@ashram.org', phone: '+91 9876543225', role: 'HOST', user_type: 'RESIDENT_EMPLOYEE_VIP_HOST', residency_status: 'RESIDENT', flat_info: 'Main Ashram Admin Complex' },
+      { name: 'Ramesh Guard (North Gate)', email: 'guard1@ashram.org', phone: '+91 9876543213', role: 'GUARD', user_type: 'GUARD', residency_status: 'NON_RESIDENT', flat_info: 'Security Dept' },
+      { name: 'Suresh Supervisor (SO)', email: 'supervisor1@ashram.org', phone: '+91 9876543214', role: 'SUPERVISOR', user_type: 'SUPERVISOR', residency_status: 'RESIDENT', flat_info: 'Security Control Room' },
+      { name: 'Major Rajesh (Security Head)', email: 'securityhead@ashram.org', phone: '+91 9876543215', role: 'SECURITY_HEAD', user_type: 'SECURITY_HEAD', residency_status: 'RESIDENT', flat_info: 'Chief Security Office' },
+      { name: 'System Administrator (Super Admin)', email: 'admin@ashram.org', phone: '+91 9876543216', role: 'ADMIN', user_type: 'ADMIN', residency_status: 'RESIDENT', flat_info: 'IT & Systems' },
+    ];
 
-        UPDATE users SET guid = 'USR-' || UPPER(SUBSTRING(MD5(id::text || name || random()::text) FROM 1 FOR 12)) WHERE guid IS NULL OR guid = '';
-        UPDATE visitors SET guid = 'VIS-' || UPPER(SUBSTRING(MD5(id::text || full_name || random()::text) FROM 1 FOR 12)) WHERE guid IS NULL OR guid = '';
-        UPDATE registrations SET guid = 'REG-' || UPPER(SUBSTRING(MD5(id::text || pass_code || random()::text) FROM 1 FOR 12)) WHERE guid IS NULL OR guid = '';
-        UPDATE gate_logs SET guid = 'GLOG-' || UPPER(SUBSTRING(MD5(id::text || random()::text) FROM 1 FOR 12)) WHERE guid IS NULL OR guid = '';
-        UPDATE resident_family_members SET guid = 'FM-' || UPPER(SUBSTRING(MD5(id::text || full_name || random()::text) FROM 1 FOR 12)) WHERE guid IS NULL OR guid = '';
-        UPDATE audit_logs SET guid = 'AUD-' || UPPER(SUBSTRING(MD5(id::text || random()::text) FROM 1 FOR 12)) WHERE guid IS NULL OR guid = '';
-      `);
-    } catch (gErr) {}
+    const defaultPasswordHash = '$2b$10$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeg6Lruj3vjPGga31lW';
+
+    for (const u of sampleHostUsers) {
+      try {
+        const checkU = await db.query(`SELECT id FROM users WHERE email = $1`, [u.email]);
+        if (checkU.rows.length === 0) {
+          const maxIdRes = await db.query('SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM users');
+          const nextId = parseInt(maxIdRes.rows[0].next_id, 10);
+          const uGuid = `USR-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
+
+          await db.query(`
+            INSERT INTO users (id, guid, name, email, phone, role, user_type, residency_status, password_hash, flat_info, registration_status)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'ACTIVE')
+          `, [nextId, uGuid, u.name, u.email, u.phone, u.role, u.user_type, u.residency_status, defaultPasswordHash, u.flat_info]);
+        }
+      } catch (uErr) {
+        console.error(`[AutoMigration Notice] Failed seeding user ${u.email}:`, uErr.message);
+      }
+    }
 
     console.log('[AutoMigration] All DB auto-migrations and seeds completed successfully!');
     return true;
