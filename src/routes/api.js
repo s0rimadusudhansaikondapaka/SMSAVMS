@@ -787,4 +787,21 @@ router.post('/admin/l2-matrix-rules/update', authenticateToken, requireRoles('AD
 router.get('/admin/l2-pending-approvals', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD'), getAllPendingL2Approvals);
 router.post('/admin/process-l2-approval', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD'), processL2ApprovalByAdmin);
 
+// Delivery Persons Management & Tracking Endpoints
+const {
+  getDeliveryPersons,
+  createDeliveryPerson,
+  updateDeliveryPerson,
+  approveOrRejectDeliveryPerson,
+  markDeliveryIn,
+  markDeliveryOut,
+} = require('../controllers/deliveryPersonsController');
+
+router.get('/delivery-persons', authenticateToken, getDeliveryPersons);
+router.post('/delivery-persons', authenticateToken, createDeliveryPerson);
+router.put('/delivery-persons/:id', authenticateToken, requireRoles('SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), updateDeliveryPerson);
+router.post('/delivery-persons/:id/approval', authenticateToken, requireRoles('SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), approveOrRejectDeliveryPerson);
+router.post('/delivery-persons/:id/mark-in', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), markDeliveryIn);
+router.post('/delivery-persons/:id/mark-out', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), markDeliveryOut);
+
 module.exports = router;

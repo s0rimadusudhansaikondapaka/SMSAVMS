@@ -70,7 +70,7 @@ async function checkHostTimeout() {
 // 3. Send reminders for requests approaching their arrival time without approval
 async function checkReminders() {
   try {
-    const reminderMinutes = parseInt(await getSettingValue('REMINDER_BEFORE_ARRIVAL_MINUTES', '30'));
+    const reminderMinutes = parseInt(await getSettingValue('REMINDER_BEFORE_ARRIVAL_MINUTES', '300')); // Default 300 mins (5 hours prior to arrival)
     const result = await db.query(
       `SELECT r.id, r.pass_code, r.valid_from, r.host_id, v.full_name as visitor_name
        FROM registrations r

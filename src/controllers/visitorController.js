@@ -80,7 +80,7 @@ async function createRegistration(req, res) {
     // Enhanced approval routing with time-based L2 and approvers_config
     let initialStatus = 'PENDING_L1';
     const arrivalHour = validFromTime.getHours();
-    const isNightArrival = arrivalHour >= 18 || arrivalHour < 6;
+    const isNightArrival = arrivalHour >= 22 || arrivalHour < 5; // 10 PM to 5 AM night arrival rule
     const arrivalDate = validFromTime.toISOString().slice(0, 10);
     const departureDate = validUntilTime.toISOString().slice(0, 10);
     const isMultiDay = arrivalDate !== departureDate;
@@ -890,11 +890,12 @@ async function getPublicHostInfo(req, res) {
         return res.status(404).json({ success: false, message: 'Invalid or non-existent invitation link.' });
       }
       const tok = tokenRes.rows[0];
-      if (tok.is_used) {
+      const isExpired = tok.created_at && (new Date() - new Date(tok.created_at) > 4 * 24 * 60 * 60 * 1000);
+      if (tok.is_used || isExpired) {
         return res.json({
           success: true,
           is_used: true,
-          message: 'This invitation link has already been used to submit a visitor registration and is now expired.',
+          message: isExpired ? 'This invitation link has expired (4-day validity limit passed).' : 'This invitation link has already been used to submit a visitor registration and is now expired.',
           host: { id: tok.host_id, name: tok.name, residency_status: tok.residency_status, role: tok.role, user_type: tok.user_type }
         });
       }
