@@ -232,6 +232,8 @@ async function runAutoMigrations() {
       { name: 'Director Ramesh (Employee + VIP Host)', email: 'employee_vip1@ashram.org', phone: '+91 9876543224', role: 'HOST', user_type: 'EMPLOYEE_VIP_HOST', residency_status: 'NON_RESIDENT', flat_info: 'Executive Office & VIP Lounge' },
       { name: 'Ashram Lead Admin (Res + Emp + VIP)', email: 'resident_emp_vip1@ashram.org', phone: '+91 9876543225', role: 'HOST', user_type: 'RESIDENT_EMPLOYEE_VIP_HOST', residency_status: 'RESIDENT', flat_info: 'Main Ashram Admin Complex' },
       { name: 'Ramesh Guard (North Gate)', email: 'guard1@ashram.org', phone: '+91 9876543213', role: 'GUARD', user_type: 'GUARD', residency_status: 'NON_RESIDENT', flat_info: 'Security Dept' },
+      { name: 'Mahesh Guard (South Gate)', email: 'guard2@ashram.org', phone: '+91 9876543255', role: 'GUARD', user_type: 'GUARD', residency_status: 'NON_RESIDENT', flat_info: 'Security Barracks A' },
+      { name: 'Ganesh Guard (East Gate)', email: 'guard3@ashram.org', phone: '+91 9876543266', role: 'GUARD', user_type: 'GUARD', residency_status: 'NON_RESIDENT', flat_info: 'Security Barracks B' },
       { name: 'Suresh Supervisor (SO)', email: 'supervisor1@ashram.org', phone: '+91 9876543214', role: 'SUPERVISOR', user_type: 'SUPERVISOR', residency_status: 'RESIDENT', flat_info: 'Security Control Room' },
       { name: 'Major Rajesh (Security Head)', email: 'securityhead@ashram.org', phone: '+91 9876543215', role: 'SECURITY_HEAD', user_type: 'SECURITY_HEAD', residency_status: 'RESIDENT', flat_info: 'Chief Security Office' },
       { name: 'System Administrator (Super Admin)', email: 'admin@ashram.org', phone: '+91 9876543216', role: 'ADMIN', user_type: 'ADMIN', residency_status: 'RESIDENT', flat_info: 'IT & Systems' },
@@ -255,6 +257,75 @@ async function runAutoMigrations() {
       } catch (uErr) {
         console.error(`[AutoMigration Notice] Failed seeding user ${u.email}:`, uErr.message);
       }
+    }
+
+    // 10. Ashram-Owned Mobile Devices & Guard Duty Sessions
+    try {
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS devices (
+          id SERIAL,
+          device_id VARCHAR(50),
+          device_name VARCHAR(100),
+          secret_code VARCHAR(255),
+          gate_name VARCHAR(100),
+          status VARCHAR(20),
+          last_active_at TIMESTAMP,
+          created_at TIMESTAMP,
+          updated_at TIMESTAMP
+        );
+      `);
+
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS device_duty_sessions (
+          id SERIAL,
+          device_id VARCHAR(50),
+          guard_id INTEGER,
+          guard_name VARCHAR(150),
+          guard_phone VARCHAR(50),
+          guard_code VARCHAR(50),
+          duty_date DATE,
+          checked_in_at TIMESTAMP,
+          checked_out_at TIMESTAMP,
+          status VARCHAR(20),
+          gate_name VARCHAR(100),
+          created_at TIMESTAMP
+        );
+      `);
+
+      // Seed Default Ashram Gate Devices
+      const defaultDevices = [
+        { device_id: 'DEV-NORTH-01', device_name: 'North Gate Main Terminal Phone', gate_name: 'NORTH_GATE', secret_code: '123456' },
+        { device_id: 'DEV-SOUTH-01', device_name: 'South Gate Terminal Phone', gate_name: 'SOUTH_GATE', secret_code: '123456' },
+        { device_id: 'DEV-EAST-01', device_name: 'East Gate Terminal Phone', gate_name: 'EAST_GATE', secret_code: '123456' },
+        { device_id: 'DEV-WEST-01', device_name: 'West Gate Terminal Phone', gate_name: 'WEST_GATE', secret_code: '123456' },
+        { device_id: 'DEV-STAFF-01', device_name: 'Staff Gate Terminal Phone', gate_name: 'STAFF_GATE', secret_code: '123456' },
+      ];
+
+      for (const dev of defaultDevices) {
+        const checkDev = await db.query(`SELECT id FROM devices WHERE device_id = $1`, [dev.device_id]);
+        if (checkDev.rows.length === 0) {
+          await db.query(`
+            INSERT INTO devices (device_id, device_name, secret_code, gate_name, status, last_active_at)
+            VALUES ($1, $2, $3, $4, 'ACTIVE', CURRENT_TIMESTAMP);
+          `, [dev.device_id, dev.device_name, dev.secret_code, dev.gate_name]);
+        }
+      }
+
+      // Ensure at least one sample active duty session exists for DEV-NORTH-01
+      const checkDuty = await db.query(`SELECT id FROM device_duty_sessions WHERE device_id = 'DEV-NORTH-01' AND status = 'ON_DUTY'`);
+      if (checkDuty.rows.length === 0) {
+        const ramesh = await db.query(`SELECT id, name, phone, guid FROM users WHERE email = 'guard1@ashram.org' LIMIT 1`);
+        if (ramesh.rows.length > 0) {
+          const r = ramesh.rows[0];
+          await db.query(`
+            INSERT INTO device_duty_sessions (device_id, guard_id, guard_name, guard_phone, guard_code, duty_date, checked_in_at, status, gate_name)
+            VALUES ('DEV-NORTH-01', $1, $2, $3, $4, CURRENT_DATE, CURRENT_TIMESTAMP, 'ON_DUTY', 'NORTH_GATE');
+          `, [r.id, r.name, r.phone, r.guid || `GRD-${r.id}`]);
+        }
+      }
+
+    } catch (dErr) {
+      console.error('[AutoMigration Notice] Error in devices migration:', dErr.message);
     }
 
     console.log('[AutoMigration] All DB auto-migrations and seeds completed successfully!');

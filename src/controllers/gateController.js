@@ -18,12 +18,12 @@ function isPermanentPass(reg) {
 
 // 1. Lookup Registration by Passcode, QR Code Hash, Phone Number, or Vehicle No
 async function verifyGatePass(req, res) {
-  const { query } = req.query; // passcode, qr content, phone number, or vehicle_no
+  const query = req.params.query || req.params.passCode || req.query.query; // passcode, qr content, phone number, or vehicle_no
   if (!query) {
     return res.status(400).json({ success: false, message: 'Search parameter required.' });
   }
 
-  let cleanQuery = query.trim().replace(/^["']|["']$/g, '');
+  let cleanQuery = String(query).trim().replace(/^["']|["']$/g, '');
 
   // Parse scanned QR content if JSON payload e.g. {"passCode":"PASS-1001", ...}
   if (cleanQuery.includes('passCode') || cleanQuery.includes('pass_code')) {
@@ -63,6 +63,8 @@ async function verifyGatePass(req, res) {
        LEFT JOIN resident_family_members rfm ON r.family_member_id = rfm.id
        LEFT JOIN registration_vehicles rv ON rv.registration_id = r.id
        WHERE LOWER(r.pass_code) = LOWER($1) 
+          OR LOWER(r.pass_code) = LOWER('PASS-' || $1)
+          OR r.pass_code ILIKE '%' || $1
           OR LOWER(COALESCE(r.guid, '')) = LOWER($1) 
           OR LOWER(COALESCE(v.vehicle_no, '')) = LOWER($1) 
           OR LOWER(COALESCE(rv.plate_number, '')) = LOWER($1)

@@ -341,6 +341,7 @@ router.delete('/visitors/family-members/:id', authenticateToken, deleteResidentF
  *         description: Approval status updated
  */
 router.post('/registrations/approve', authenticateToken, updateApproval);
+router.post('/registrations/approval', authenticateToken, updateApproval);
 router.post('/registrations/generate-qr', authenticateToken, generateRegistrationQr);
 router.post('/registrations/generate-invite-token', authenticateToken, generateInviteToken);
 router.get('/registrations/public-host/:host_id', getPublicHostInfo);
@@ -392,6 +393,7 @@ router.get('/registrations/history', authenticateToken, getVisitHistory);
  *         description: Pass not found or invalid
  */
 router.get('/gate/verify', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), verifyGatePass);
+router.get('/gate/verify/:query', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), verifyGatePass);
 
 /**
  * @openapi
@@ -450,6 +452,17 @@ router.post('/gate/movement', authenticateToken, requireRoles('GUARD', 'SUPERVIS
  *         description: Active visitors inside campus
  */
 router.get('/gate/inside', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), getVisitorsInsideCampus);
+router.get('/gate/visitors-inside', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), getVisitorsInsideCampus);
+router.post('/audit-log', authenticateToken, async (req, res) => {
+  const { action, entity_type, remarks } = req.body;
+  try {
+    const { logSystemAction } = require('../services/auditLogger');
+    await logSystemAction(req.user ? req.user.id : null, action || 'INCIDENT_REPORT', entity_type || 'GATE_INCIDENT', null, typeof remarks === 'string' ? remarks : JSON.stringify(remarks));
+    res.json({ success: true, message: 'Audit event logged successfully.' });
+  } catch (e) {
+    res.json({ success: true, message: 'Audit event received.' });
+  }
+});
 router.get('/gate/spot-queue', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), getSpotRegistrationsQueue);
 router.post('/gate/assign-host', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), assignHostToSpotRegistration);
 router.get('/gate/recent-lookups', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), getRecentGateLookups);
@@ -803,5 +816,31 @@ router.put('/delivery-persons/:id', authenticateToken, requireRoles('SUPERVISOR'
 router.post('/delivery-persons/:id/approval', authenticateToken, requireRoles('SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), approveOrRejectDeliveryPerson);
 router.post('/delivery-persons/:id/mark-in', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), markDeliveryIn);
 router.post('/delivery-persons/:id/mark-out', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), markDeliveryOut);
+
+// Ashram-Owned Mobile Guard Devices & Guard Duty Sessions
+const {
+  deviceAuth,
+  getOnDutyGuards,
+  dutyCheckIn,
+  dutyCheckOut,
+  searchGuards,
+  getAdminDevices,
+  createAdminDevice,
+  updateAdminDevice,
+  getDeviceDutyAudit,
+} = require('../controllers/deviceController');
+
+// Device Auth & Guard Duty Endpoints (Mobile Guard App)
+router.post('/devices/auth', deviceAuth);
+router.get('/devices/guards-search', searchGuards);
+router.get('/devices/:deviceId/on-duty', getOnDutyGuards);
+router.post('/devices/duty-checkin', dutyCheckIn);
+router.post('/devices/duty-checkout', dutyCheckOut);
+
+// Super Admin Device Management & Audit Endpoints
+router.get('/admin/devices', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD'), getAdminDevices);
+router.post('/admin/devices', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD'), createAdminDevice);
+router.put('/admin/devices/:id', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD'), updateAdminDevice);
+router.get('/admin/devices/audit', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD', 'SUPERVISOR'), getDeviceDutyAudit);
 
 module.exports = router;
