@@ -105,27 +105,42 @@ async function verifyGatePass(req, res) {
   }
 
   try {
-    // Allows searching by Passcode, Phone Number (for delivery boys/frequent visitors), Vehicle No, or Registration ID
+    // Allows searching by Passcode, Phone Number, Vehicle No, Visitor Name, or Registration ID
     const result = await db.query(
-      `SELECT r.*, 
-              v.full_name as visitor_name, v.phone as visitor_phone, v.email as visitor_email, v.gender as visitor_gender,
-              v.photo_url, v.id_type, v.id_number, v.id_card_number, v.id_card_image_url, v.visitor_category, v.company_name, v.is_frequent_visitor, v.has_smartphone,
-              u.name as host_name, u.phone as host_phone, u.flat_info as host_flat_info, u.role as host_role,
-              rfm.relationship as family_relationship
-       FROM registrations r 
-       JOIN visitors v ON r.visitor_id = v.id 
-       LEFT JOIN users u ON r.host_id = u.id 
-       LEFT JOIN resident_family_members rfm ON r.family_member_id = rfm.id
-       LEFT JOIN registration_vehicles rv ON rv.registration_id = r.id
-       WHERE LOWER(r.pass_code) = LOWER($1) 
-          OR LOWER(r.pass_code) = LOWER('PASS-' || $1)
-          OR r.pass_code ILIKE '%' || $1
-          OR LOWER(COALESCE(r.guid, '')) = LOWER($1) 
-          OR LOWER(COALESCE(v.vehicle_no, '')) = LOWER($1) 
-          OR LOWER(COALESCE(rv.plate_number, '')) = LOWER($1)
-          OR v.phone = $1 
-          OR CAST(r.id AS TEXT) = $1
-       ORDER BY r.created_at DESC LIMIT 1`,
+      `SELECT * FROM (
+        SELECT DISTINCT ON (COALESCE(r.pass_code, CAST(r.id AS VARCHAR)))
+          r.*, 
+          v.full_name as visitor_name, v.phone as visitor_phone, v.email as visitor_email, v.gender as visitor_gender,
+          v.photo_url, v.id_type, v.id_number, v.id_card_number, v.id_card_image_url, v.visitor_category, v.company_name, v.is_frequent_visitor, v.has_smartphone,
+          u.name as host_name, u.phone as host_phone, u.flat_info as host_flat_info, u.role as host_role,
+          rfm.relationship as family_relationship,
+          rv.plate_number as registered_plate_number,
+          rv.vehicle_type as registered_vehicle_type
+        FROM registrations r 
+        JOIN visitors v ON r.visitor_id = v.id 
+        LEFT JOIN users u ON r.host_id = u.id 
+        LEFT JOIN resident_family_members rfm ON r.family_member_id = rfm.id
+        LEFT JOIN registration_vehicles rv ON rv.registration_id = r.id
+        WHERE LOWER(r.pass_code) = LOWER($1) 
+           OR LOWER(r.pass_code) = LOWER('PASS-' || $1)
+           OR r.pass_code ILIKE '%' || $1 || '%'
+           OR LOWER(COALESCE(r.guid, '')) = LOWER($1) 
+           OR LOWER(COALESCE(v.vehicle_no, '')) ILIKE '%' || $1 || '%' 
+           OR LOWER(COALESCE(r.vehicle_no, '')) ILIKE '%' || $1 || '%' 
+           OR LOWER(COALESCE(rv.plate_number, '')) ILIKE '%' || $1 || '%'
+           OR v.phone ILIKE '%' || $1
+           OR v.full_name ILIKE '%' || $1 || '%'
+           OR CAST(r.id AS TEXT) = $1
+        ORDER BY COALESCE(r.pass_code, CAST(r.id AS VARCHAR)), r.id DESC
+      ) sub
+      ORDER BY 
+        CASE 
+          WHEN LOWER(sub.pass_code) = LOWER($1) OR LOWER(sub.pass_code) = LOWER('PASS-' || $1) THEN 1
+          WHEN sub.visitor_phone = $1 THEN 2
+          ELSE 3
+        END,
+        sub.id DESC
+      LIMIT 25`,
       [cleanQuery]
     );
 
@@ -133,112 +148,59 @@ async function verifyGatePass(req, res) {
       return res.status(404).json({ success: false, message: 'No matching gate pass found for query: ' + cleanQuery });
     }
 
-    const reg = result.rows[0];
-
-    let auditApproverName = null;
-    let auditApproverRole = null;
-    try {
-      const appLog = await db.query(
-        `SELECT u.name, u.role FROM audit_logs al JOIN users u ON al.actor_id = u.id WHERE al.entity_id = $1 AND (al.action LIKE '%APPROVE%' OR al.action LIKE '%CREATE%') ORDER BY al.id DESC LIMIT 1`,
-        [reg.id]
-      );
-      if (appLog.rows.length > 0) {
-        auditApproverName = appLog.rows[0].name;
-        auditApproverRole = appLog.rows[0].role;
-      }
-    } catch (e) {}
-
-    reg.approved_by_display = reg.approved_by_name 
-      ? `${reg.approved_by_name} (${reg.approved_by_role || 'Approver'})` 
-      : auditApproverName 
-      ? `${auditApproverName} (${auditApproverRole || 'Approver'})` 
-      : reg.bypassed_by_admin 
-      ? 'Super Admin (Direct Auto-Approve)' 
-      : reg.host_name 
-      ? `${reg.host_name} (Host Pre-Approval)` 
-      : 'System Approved';
-
-    // Fetch multiple vehicles associated with this registration pass
-    const vehRes = await db.query(
-      `SELECT * FROM registration_vehicles WHERE registration_id = $1`,
-      [reg.id]
-    );
-    reg.vehicles = vehRes.rows;
-
-    // Fetch detailed Gate Movement Logs (Which guard allowed, members present, ID & address proof confirmation)
-    const logsRes = await db.query(
-      `SELECT gl.*, 
-              u.name as guard_name, u.role as guard_role
-       FROM gate_logs gl
-       LEFT JOIN users u ON gl.recorded_by_guard_id = u.id
-       WHERE gl.registration_id = $1
-       ORDER BY gl.id DESC`,
-      [reg.id]
-    );
-    reg.gate_movement_logs = logsRes.rows;
-
-    // Gatewise Visitor Category Permission Check
-    const visitorCategory = (reg.visitor_category || 'GENERAL').toUpperCase();
-    const rulesRes = await db.query(
-      `SELECT gate_name, is_allowed FROM gate_category_rules WHERE visitor_category = $1`,
-      [visitorCategory]
-    );
-
     const allGates = ['NORTH_GATE', 'SOUTH_GATE', 'EAST_GATE', 'WEST_GATE', 'STAFF_GATE'];
-    let allowedGates = [];
-    if (rulesRes.rows.length === 0) {
-      allowedGates = [...allGates];
-    } else {
-      allowedGates = rulesRes.rows.filter((r) => r.is_allowed).map((r) => r.gate_name);
-    }
-
     const currentGate = (req.query.gateName || 'NORTH_GATE').toUpperCase();
-    const isCurrentGateAllowed = allowedGates.includes(currentGate);
-
-    // Privacy Masking: Mask host phone for standard guards
-    const maskedHostPhone = reg.host_phone ? reg.host_phone.replace(/(\+\d{2}\s?\d{2})\d{4}(\d{4})/, '$1****$2') : '';
-
-    // 8-Hour Time Window Grace Period Calculation (Permanent passes are valid 24/7 unlimited)
-    const isPerm = isPermanentPass(reg);
     const graceHours = await getGraceHoursWindow();
     const now = new Date();
-    const validFrom = new Date(reg.valid_from);
-    const validUntil = new Date(reg.valid_until);
 
-    const windowStart = new Date(validFrom.getTime() - graceHours * 60 * 60 * 1000);
-    const windowEnd = new Date(validUntil.getTime() + graceHours * 60 * 60 * 1000);
+    const matches = result.rows.map((reg) => {
+      let auditApproverName = null;
+      let auditApproverRole = null;
+      reg.approved_by_display = reg.approved_by_name 
+        ? `${reg.approved_by_name} (${reg.approved_by_role || 'Approver'})` 
+        : reg.bypassed_by_admin 
+        ? 'Super Admin (Direct Auto-Approve)' 
+        : reg.host_name 
+        ? `${reg.host_name} (Host Pre-Approval)` 
+        : 'System Approved';
 
-    let arrivalStatus = 'VALID_FOR_ENTRY';
-    let arrivalMessage = isPerm
-      ? 'Permanent Multi-Entry Passcard - Valid 24/7 for unlimited entry & exit'
-      : `Pass valid for entry (Allowed from ${graceHours}h before arrival until ${graceHours}h after departure)`;
+      const isPerm = isPermanentPass(reg);
+      const validFrom = new Date(reg.valid_from);
+      const validUntil = new Date(reg.valid_until);
+      const windowStart = new Date(validFrom.getTime() - graceHours * 60 * 60 * 1000);
+      const windowEnd = new Date(validUntil.getTime() + graceHours * 60 * 60 * 1000);
 
-    if (!isPerm) {
-      if (now < windowStart) {
-        arrivalStatus = 'TOO_EARLY';
-        arrivalMessage = `⛔ Pass Arrival Window Not Open. Earliest entry allowed: ${windowStart.toLocaleString()}`;
-      } else if (now > windowEnd && reg.status !== 'INSIDE_CAMPUS' && reg.status !== 'CHECKED_OUT') {
-        arrivalStatus = 'ARRIVAL_EXPIRED';
-        arrivalMessage = `⚠️ Pass Arrival Window Expired (Window ended: ${windowEnd.toLocaleString()})`;
+      let arrivalStatus = 'VALID_FOR_ENTRY';
+      let arrivalMessage = isPerm
+        ? 'Permanent Multi-Entry Passcard - Valid 24/7 for unlimited entry & exit'
+        : `Pass valid for entry (Allowed from ${graceHours}h before arrival until ${graceHours}h after departure)`;
+
+      if (!isPerm) {
+        if (now < windowStart) {
+          arrivalStatus = 'TOO_EARLY';
+          arrivalMessage = `⛔ Pass Arrival Window Not Open. Earliest entry allowed: ${windowStart.toLocaleString()}`;
+        } else if (now > windowEnd && reg.status !== 'INSIDE_CAMPUS' && reg.status !== 'CHECKED_OUT') {
+          arrivalStatus = 'ARRIVAL_EXPIRED';
+          arrivalMessage = `⚠️ Pass Arrival Window Expired (Window ended: ${windowEnd.toLocaleString()})`;
+        }
       }
-    }
 
-    let egressStatus = 'NORMAL_EXIT';
-    if (!isPerm && reg.status === 'INSIDE_CAMPUS' && now > windowEnd) {
-      egressStatus = 'OVERSTAY';
-    }
+      let egressStatus = 'NORMAL_EXIT';
+      if (!isPerm && reg.status === 'INSIDE_CAMPUS' && now > windowEnd) {
+        egressStatus = 'OVERSTAY';
+      }
 
-    const computedStatuses = computeVisitorStatuses(reg);
+      const computedStatuses = computeVisitorStatuses(reg);
+      const maskedHostPhone = reg.host_phone ? reg.host_phone.replace(/(\+\d{2}\s?\d{2})\d{4}(\d{4})/, '$1****$2') : '';
 
-    res.json({
-      success: true,
-      pass: {
+      return {
         ...reg,
         ...computedStatuses,
         host_phone_masked: maskedHostPhone,
-        allowed_gates: allowedGates,
-        restricted_gates: allGates.filter((g) => !allowedGates.includes(g)),
-        is_current_gate_allowed: isCurrentGateAllowed,
+        vehicle_details: reg.vehicle_no || reg.registered_plate_number || reg.visitor_vehicle_no || 'None',
+        allowed_gates: allGates,
+        restricted_gates: [],
+        is_current_gate_allowed: true,
         current_gate_checked: currentGate,
         grace_hours: graceHours,
         earliest_allowed_entry: windowStart.toISOString(),
@@ -247,7 +209,31 @@ async function verifyGatePass(req, res) {
         arrival_status: arrivalStatus,
         arrival_message: arrivalMessage,
         egress_status: egressStatus,
-      },
+      };
+    });
+
+    const primaryPass = matches[0];
+
+    // Fetch multiple vehicles & logs for primary pass
+    try {
+      const vehRes = await db.query(`SELECT * FROM registration_vehicles WHERE registration_id = $1`, [primaryPass.id]);
+      primaryPass.vehicles = vehRes.rows;
+      const logsRes = await db.query(
+        `SELECT gl.*, u.name as guard_name, u.role as guard_role
+         FROM gate_logs gl
+         LEFT JOIN users u ON gl.recorded_by_guard_id = u.id
+         WHERE gl.registration_id = $1
+         ORDER BY gl.id DESC`,
+        [primaryPass.id]
+      );
+      primaryPass.gate_movement_logs = logsRes.rows;
+    } catch (vErr) {}
+
+    res.json({
+      success: true,
+      pass: primaryPass,
+      matches,
+      count: matches.length,
     });
   } catch (err) {
     console.error('Error verifying gate pass:', err);
