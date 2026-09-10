@@ -5,8 +5,13 @@ const { checkSystematicCheckouts } = require('./expiryService');
 
 function computeVisitorStatuses(reg) {
   const now = new Date();
+  const validFrom = reg.valid_from ? new Date(reg.valid_from) : new Date();
   const validUntil = new Date(reg.valid_until);
   const departureTimePassed = now > validUntil;
+
+  // Arrival window: 8 hours prior to arrival
+  const eightHoursPrior = new Date(validFrom.getTime() - 8 * 60 * 60 * 1000);
+  const isWithinArrivalWindow = now >= eightHoursPrior;
 
   // Category 1: Lifecycle Status (Yet to Arrive, CHECKED-IN, CHECKED-OUT)
   let lifecycleStatus = 'Yet to Arrive';
@@ -37,8 +42,8 @@ function computeVisitorStatuses(reg) {
     lifecycleStatus = 'CHECKED-OUT';
   }
 
-  // IN button rule: enabled only till Visitor's estimated departure time
-  const isInEnabled = !departureTimePassed && presenceStatus !== 'currently_inside';
+  // IN button rule: enabled only if within 8 hours prior arrival AND till Visitor's estimated departure time AND not currently inside
+  const isInEnabled = isWithinArrivalWindow && !departureTimePassed && presenceStatus !== 'currently_inside';
   // OUT button rule: enabled if Visitor's status is 'currently_inside' or 'over_stayed'
   const isOutEnabled = presenceStatus === 'currently_inside' || presenceStatus === 'over_stayed';
 
@@ -46,6 +51,7 @@ function computeVisitorStatuses(reg) {
     lifecycle_status: lifecycleStatus,
     presence_status: presenceStatus,
     departure_time_passed: departureTimePassed,
+    is_within_arrival_window: isWithinArrivalWindow,
     is_in_enabled: isInEnabled,
     is_out_enabled: isOutEnabled,
   };
@@ -687,11 +693,19 @@ async function getInvitedVisitors(req, res) {
     // Upcoming: valid_from <= (NOW() + INTERVAL '8 hours') AND valid_until >= (NOW() - INTERVAL '2 hours')
     // Checked-in: lifecycle_status = 'CHECKED-IN' OR status = 'INSIDE_CAMPUS' OR presence_status = 'currently_inside' OR first_entry_at IS NOT NULL
     whereClauses.push(`(
-      (r.valid_from <= (CURRENT_TIMESTAMP + INTERVAL '8 hours') AND r.valid_until >= (CURRENT_TIMESTAMP - INTERVAL '2 hours') AND r.status IN ('APPROVED', 'PENDING_L1', 'PENDING_L2', 'INSIDE_CAMPUS', 'CHECKED_OUT'))
-      OR r.lifecycle_status = 'CHECKED-IN'
-      OR r.status = 'INSIDE_CAMPUS'
-      OR r.presence_status = 'currently_inside'
-      OR r.first_entry_at IS NOT NULL
+      (
+        r.status IN ('APPROVED', 'INSIDE_CAMPUS')
+        AND r.pass_code IS NOT NULL
+        AND r.registration_type NOT IN ('DELIVERY_COURIER')
+        AND COALESCE(v.visitor_category, '') NOT IN ('MAID', 'DELIVERY')
+        AND r.valid_from <= (CURRENT_TIMESTAMP + INTERVAL '8 hours')
+        AND r.valid_until >= (CURRENT_TIMESTAMP - INTERVAL '2 hours')
+      )
+      OR (
+        r.status = 'INSIDE_CAMPUS'
+        OR r.presence_status = 'currently_inside'
+        OR ((r.lifecycle_status = 'CHECKED-IN' OR r.first_entry_at IS NOT NULL) AND r.valid_until >= (CURRENT_TIMESTAMP - INTERVAL '4 hours'))
+      )
     )`);
 
     // Filter 2: Search by visitor name, last 4 digits phone, or vehicle number, or passcode

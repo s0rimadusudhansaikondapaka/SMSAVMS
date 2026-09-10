@@ -588,6 +588,25 @@ router.get('/gate/gatewise-stats', authenticateToken, requireRoles('GUARD', 'SUP
 router.get('/gate/invited-visitors', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), getInvitedVisitors);
 router.patch('/gate/visitors/:id/details', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), updateVisitorGateDetails);
 
+router.post('/gate/seed-sample-invited', async (req, res) => {
+  try {
+    const runAutoMigrations = require('../db/autoMigrate');
+    if (req.body?.reset) {
+      await db.query(`DELETE FROM registrations WHERE pass_code LIKE 'PASS-INV-%'`);
+    }
+    await runAutoMigrations();
+    const list = await db.query(`
+      SELECT r.id, r.pass_code, r.status, r.lifecycle_status, r.presence_status, r.valid_from, r.valid_until, v.full_name as visitor_name
+      FROM registrations r JOIN visitors v ON r.visitor_id = v.id
+      WHERE r.pass_code LIKE 'PASS-INV-%'
+      ORDER BY r.id ASC
+    `);
+    res.json({ success: true, message: 'Sample invited visitors seeded successfully.', visitors: list.rows });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Failed to seed sample visitors: ' + err.message });
+  }
+});
+
 /**
  * @openapi
  * /api/supervisor/overstays:

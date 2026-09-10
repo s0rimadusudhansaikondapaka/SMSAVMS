@@ -374,8 +374,177 @@ async function runAutoMigrations() {
           resolved_at TIMESTAMP
         );
       `);
-    } catch (incErr) {
-      console.error('[AutoMigration Notice] Error in incidents migration:', incErr.message);
+    // 12. Seed Sample Invited Visitors Arriving Today (+8 Hours Window)
+      console.log('[AutoMigration] Refreshing/seeding realistic sample invited visitors for today (+8h window)...');
+
+      const sampleVisitors = [
+          {
+            name: 'Gayatri Devi (Family Devotee)',
+            phone: '+91 9876543221',
+            email: 'gayatri.devi@ashramdevotee.org',
+            gender: 'Female',
+            photo_url: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150',
+            id_card_number: '9876-1122-3344',
+            visitor_category: 'GENERAL',
+            vehicle_no: 'KA-01-AB-1234',
+            pass_code: 'PASS-INV-8821',
+            host_id: 1, // Srinivas Rao
+            purpose: 'Darshan, Bhajan & Family Meeting with Resident Host',
+            visit_type: 'HOME',
+            valid_from_offset_hours: 1, // 1 hour from now
+            valid_until_offset_hours: 6,
+            status: 'APPROVED',
+            lifecycle_status: 'Yet to Arrive',
+            presence_status: 'currently_outside',
+            men: 2, women: 2, kids: 1, total: 5
+          },
+          {
+            name: 'Dr. Raghavan Nair (Medical Consultant)',
+            phone: '+91 9845112233',
+            email: 'raghavan.nair@hospital.org',
+            gender: 'Male',
+            photo_url: 'https://images.unsplash.com/photo-1537368910025-700350fe46c7?w=150',
+            id_card_number: '8877-2233-4455',
+            visitor_category: 'VIP',
+            vehicle_no: 'KA-04-ME-5678',
+            pass_code: 'PASS-INV-4512',
+            host_id: 2, // Dr. Kumar
+            purpose: 'Ashram Healthcare & Hospital Consultation',
+            visit_type: 'OFFICE',
+            valid_from_offset_hours: 3, // 3 hours from now
+            valid_until_offset_hours: 8,
+            status: 'APPROVED',
+            lifecycle_status: 'Yet to Arrive',
+            presence_status: 'currently_outside',
+            men: 1, women: 1, kids: 0, total: 2
+          },
+          {
+            name: 'Srikanth Varma (Invited Devotee)',
+            phone: '+91 9886007788',
+            email: 'srikanth.varma@devotee.org',
+            gender: 'Male',
+            photo_url: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150',
+            id_card_number: '7766-3344-5566',
+            visitor_category: 'GENERAL',
+            vehicle_no: 'KA-53-Z-9009',
+            pass_code: 'PASS-INV-9904',
+            host_id: 1, // Srinivas Rao
+            purpose: 'Ashram Seva & Temple Darshan',
+            visit_type: 'HOME',
+            valid_from_offset_hours: -0.5, // Arrived 30 mins ago
+            valid_until_offset_hours: 5,
+            status: 'APPROVED',
+            lifecycle_status: 'Yet to Arrive',
+            presence_status: 'currently_outside',
+            men: 1, women: 0, kids: 0, total: 1
+          },
+          {
+            name: 'Meenakshi Sundaram (Checked-In Guest)',
+            phone: '+91 9448113355',
+            email: 'meenakshi.s@ashramtrust.org',
+            gender: 'Female',
+            photo_url: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150',
+            id_card_number: '6655-4455-6677',
+            visitor_category: 'GENERAL',
+            vehicle_no: 'KA-05-NB-7711',
+            pass_code: 'PASS-INV-3355',
+            host_id: 3, // Swami Nathan
+            purpose: 'Spiritual Discourses & Library Research',
+            visit_type: 'OFFICE',
+            valid_from_offset_hours: -2, // Entered 2 hours ago
+            valid_until_offset_hours: 4,
+            status: 'INSIDE_CAMPUS',
+            lifecycle_status: 'CHECKED-IN',
+            presence_status: 'currently_inside',
+            men: 2, women: 1, kids: 1, total: 4
+          },
+          {
+            name: 'Rajeshwari Patel (Re-entry Guest)',
+            phone: '+91 9900224466',
+            email: 'rajeshwari.patel@guest.org',
+            gender: 'Female',
+            photo_url: 'https://images.unsplash.com/photo-1508214751196-bcfd4ca60f91?w=150',
+            id_card_number: '5544-5566-7788',
+            visitor_category: 'GENERAL',
+            vehicle_no: 'KA-03-MK-3322',
+            pass_code: 'PASS-INV-4466',
+            host_id: 1, // Srinivas Rao
+            purpose: 'Resident Family Lunch & Afternoon Bhajans',
+            visit_type: 'HOME',
+            valid_from_offset_hours: -3,
+            valid_until_offset_hours: 3,
+            status: 'APPROVED',
+            lifecycle_status: 'CHECKED-IN',
+            presence_status: 'currently_outside',
+            men: 1, women: 1, kids: 0, total: 2
+          }
+        ];
+
+        for (const item of sampleVisitors) {
+          let vId;
+          const vCheck = await db.query('SELECT id FROM visitors WHERE phone = $1 OR full_name = $2', [item.phone, item.name]);
+          if (vCheck.rows.length > 0) {
+            vId = vCheck.rows[0].id;
+            await db.query(
+              'UPDATE visitors SET full_name = $1, vehicle_no = $2, visitor_category = $3 WHERE id = $4',
+              [item.name, item.vehicle_no, item.visitor_category, vId]
+            );
+          } else {
+            const maxV = await db.query('SELECT COALESCE(MAX(id), 500) as max_id FROM visitors');
+            const nextVId = Math.max(500, parseInt(maxV.rows[0].max_id, 10)) + 1;
+            try {
+              const insV = await db.query(
+                `INSERT INTO visitors (id, full_name, phone, email, gender, photo_url, id_type, id_number, id_card_number, visitor_category, vehicle_no)
+                 VALUES ($1, $2, $3, $4, $5, $6, 'Aadhaar', $7, $7, $8, $9) RETURNING id`,
+                [nextVId, item.name, item.phone, item.email, item.gender, item.photo_url, item.id_card_number, item.visitor_category, item.vehicle_no]
+              );
+              vId = insV.rows[0].id;
+            } catch (insVErr) {
+              const recV = await db.query('SELECT id FROM visitors WHERE phone = $1 OR full_name = $2', [item.phone, item.name]);
+              if (recV.rows.length > 0) vId = recV.rows[0].id;
+            }
+          }
+
+          if (!vId) continue;
+
+          const validFrom = new Date(Date.now() + item.valid_from_offset_hours * 3600000);
+          const validUntil = new Date(Date.now() + item.valid_until_offset_hours * 3600000);
+
+          const rCheck = await db.query('SELECT id FROM registrations WHERE pass_code = $1', [item.pass_code]);
+          if (rCheck.rows.length > 0) {
+            await db.query(
+              `UPDATE registrations 
+               SET valid_from = $1, valid_until = $2, status = $3, lifecycle_status = $4, presence_status = $5, vehicle_no = $6
+               WHERE id = $7`,
+              [validFrom, validUntil, item.status, item.lifecycle_status, item.presence_status, item.vehicle_no, rCheck.rows[0].id]
+            );
+          } else {
+            const maxR = await db.query('SELECT COALESCE(MAX(id), 500) as max_id FROM registrations');
+            const nextRId = Math.max(500, parseInt(maxR.rows[0].max_id, 10)) + 1;
+            await db.query(
+              `INSERT INTO registrations (
+                id, visitor_id, host_id, purpose, registration_mode, registration_type, visit_type,
+                stay_required, accommodation_approved, priority, status, pass_code, valid_from, valid_until,
+                adult_men_count, adult_women_count, children_count, boys_count, girls_count, person_count,
+                lifecycle_status, presence_status, vehicle_no
+              ) VALUES (
+                $1, $2, $3, $4, 'Single', 'PRE_APPROVAL', $5,
+                false, false, 'P2', $6, $7, $8, $9,
+                $10, $11, $12, 0, 0, $13,
+                $14, $15, $16
+              )`,
+              [
+                nextRId, vId, item.host_id, item.purpose, item.visit_type,
+                item.status, item.pass_code, validFrom, validUntil,
+                item.men, item.women, item.kids, item.total,
+                item.lifecycle_status, item.presence_status, item.vehicle_no
+              ]
+            );
+          }
+        }
+        console.log('[AutoMigration] Successfully seeded sample invited visitors for today!');
+    } catch (seedInvErr) {
+      console.error('[AutoMigration Notice] Error seeding sample invited visitors:', seedInvErr.message || seedInvErr);
     }
 
     console.log('[AutoMigration] All DB auto-migrations and seeds completed successfully!');

@@ -41,6 +41,12 @@ async function initDb() {
     const res = await realPool.query('SELECT 1');
     console.log(`[PostgreSQL DB] Successfully connected to PostgreSQL database in '${activeEnv.toUpperCase()}' environment.`);
     pool = realPool;
+    try {
+      const runAutoMigrations = require('../db/autoMigrate');
+      await runAutoMigrations();
+    } catch (mErr) {
+      console.error('[PostgreSQL DB Error] Error executing auto-migrations on real DB:', mErr.message || mErr);
+    }
   } catch (err) {
     console.log(`[PostgreSQL DB Notice] Remote/Native PostgreSQL connection error (${err.message}). Initializing embedded PostgreSQL engine for database '${process.env.DB_NAME || 'vm'}'...`);
     isMemoryMode = true;
