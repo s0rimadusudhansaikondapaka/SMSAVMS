@@ -121,10 +121,14 @@ async function checkSystematicCheckouts() {
     if (checkoutRes.rows.length > 0) {
       console.log(`[Expiry Service] Systematic CHECKED-OUT executed for ${checkoutRes.rows.length} registration(s):`, checkoutRes.rows.map(r => r.pass_code));
       for (const reg of checkoutRes.rows) {
-        await db.query(
-          `INSERT INTO audit_logs (action, entity_type, entity_id, remarks) VALUES ($1, $2, $3, $4)`,
-          ['SYSTEMATIC_CHECKOUT', 'REGISTRATION', reg.id, `Visitor systematically CHECKED-OUT: estimated departure time elapsed while currently outside campus`]
-        );
+        try {
+          const maxAl = await db.query('SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM audit_logs');
+          const nextAlId = parseInt(maxAl.rows[0].next_id, 10);
+          await db.query(
+            `INSERT INTO audit_logs (id, action, entity_type, entity_id, remarks) VALUES ($1, $2, $3, $4, $5)`,
+            [nextAlId, 'SYSTEMATIC_CHECKOUT', 'REGISTRATION', reg.id, `Visitor systematically CHECKED-OUT: estimated departure time elapsed while currently outside campus`]
+          );
+        } catch (alErr) {}
       }
       broadcastSyncEvent('SYSTEMATIC_CHECKOUT', { count: checkoutRes.rows.length, passes: checkoutRes.rows.map(r => r.pass_code) });
     }

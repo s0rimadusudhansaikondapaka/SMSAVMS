@@ -73,6 +73,7 @@ async function runAutoMigrations() {
     await db.query(`
       ALTER TABLE registrations 
       ADD COLUMN IF NOT EXISTS guid VARCHAR(64),
+      ADD COLUMN IF NOT EXISTS vehicle_no VARCHAR(100),
       ADD COLUMN IF NOT EXISTS approved_by_user_id INTEGER,
       ADD COLUMN IF NOT EXISTS approved_by_name VARCHAR(150),
       ADD COLUMN IF NOT EXISTS approved_by_role VARCHAR(50),

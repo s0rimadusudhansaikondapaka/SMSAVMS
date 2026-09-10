@@ -665,6 +665,8 @@ async function getGatewiseStatsAndSelfRegistered(req, res) {
     console.error('Error fetching gatewise stats:', err);
     res.status(500).json({ success: false, message: 'Failed to fetch gatewise stats.' });
   }
+}
+
 // 4. Get Invited Visitors (+8 hours upcoming & already checked-in) with search
 async function getInvitedVisitors(req, res) {
   try {
@@ -685,7 +687,7 @@ async function getInvitedVisitors(req, res) {
     // Upcoming: valid_from <= (NOW() + INTERVAL '8 hours') AND valid_until >= (NOW() - INTERVAL '2 hours')
     // Checked-in: lifecycle_status = 'CHECKED-IN' OR status = 'INSIDE_CAMPUS' OR presence_status = 'currently_inside' OR first_entry_at IS NOT NULL
     whereClauses.push(`(
-      (r.valid_from <= (NOW() + INTERVAL '8 hours') AND r.valid_until >= (NOW() - INTERVAL '2 hours') AND r.status IN ('APPROVED', 'PENDING_L1', 'PENDING_L2', 'INSIDE_CAMPUS', 'CHECKED_OUT'))
+      (r.valid_from <= (CURRENT_TIMESTAMP + INTERVAL '8 hours') AND r.valid_until >= (CURRENT_TIMESTAMP - INTERVAL '2 hours') AND r.status IN ('APPROVED', 'PENDING_L1', 'PENDING_L2', 'INSIDE_CAMPUS', 'CHECKED_OUT'))
       OR r.lifecycle_status = 'CHECKED-IN'
       OR r.status = 'INSIDE_CAMPUS'
       OR r.presence_status = 'currently_inside'
@@ -811,9 +813,11 @@ async function updateVisitorGateDetails(req, res) {
           [newVehicleNo, vehicle_type || null, rvCheck.rows[0].id]
         );
       } else if (newVehicleNo) {
+        const maxRv = await db.query('SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM registration_vehicles');
+        const nextRvId = parseInt(maxRv.rows[0].next_id, 10);
         await db.query(
-          `INSERT INTO registration_vehicles (registration_id, plate_number, vehicle_type) VALUES ($1, $2, $3)`,
-          [id, newVehicleNo, vehicle_type || 'FOUR_WHEELER']
+          `INSERT INTO registration_vehicles (id, registration_id, plate_number, vehicle_type) VALUES ($1, $2, $3, $4)`,
+          [nextRvId, id, newVehicleNo, vehicle_type || 'FOUR_WHEELER']
         );
       }
     }
