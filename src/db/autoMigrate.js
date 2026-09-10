@@ -393,6 +393,21 @@ async function runAutoMigrations() {
     // 12. Seed Sample Invited Visitors Arriving Today (+8 Hours Window)
       console.log('[AutoMigration] Refreshing/seeding realistic sample invited visitors for today (+8h window)...');
 
+      // Clean up any historical duplicate registrations with same pass_code, keeping only latest id
+      try {
+        await db.query(`
+          DELETE FROM registrations
+          WHERE id NOT IN (
+            SELECT DISTINCT ON (pass_code) id
+            FROM registrations
+            WHERE pass_code IS NOT NULL
+            ORDER BY pass_code, id DESC
+          ) AND pass_code IS NOT NULL
+        `);
+      } catch (cleanDupErr) {
+        console.warn('[AutoMigration Notice] Could not run bulk duplicate pass cleanup:', cleanDupErr.message || cleanDupErr);
+      }
+
       const sampleVisitors = [
           {
             name: 'Gayatri Devi (Family Devotee)',
@@ -526,13 +541,17 @@ async function runAutoMigrations() {
           const validFrom = new Date(Date.now() + item.valid_from_offset_hours * 3600000);
           const validUntil = new Date(Date.now() + item.valid_until_offset_hours * 3600000);
 
-          const rCheck = await db.query('SELECT id FROM registrations WHERE pass_code = $1', [item.pass_code]);
+          const rCheck = await db.query('SELECT id FROM registrations WHERE pass_code = $1 ORDER BY id DESC', [item.pass_code]);
           if (rCheck.rows.length > 0) {
+            const keepId = rCheck.rows[0].id;
+            if (rCheck.rows.length > 1) {
+              await db.query('DELETE FROM registrations WHERE pass_code = $1 AND id != $2', [item.pass_code, keepId]);
+            }
             await db.query(
               `UPDATE registrations 
                SET valid_from = $1, valid_until = $2, status = $3, lifecycle_status = $4, presence_status = $5, vehicle_no = $6
                WHERE id = $7`,
-              [validFrom, validUntil, item.status, item.lifecycle_status, item.presence_status, item.vehicle_no, rCheck.rows[0].id]
+              [validFrom, validUntil, item.status, item.lifecycle_status, item.presence_status, item.vehicle_no, keepId]
             );
           } else {
             const maxR = await db.query('SELECT COALESCE(MAX(id), 500) as max_id FROM registrations');

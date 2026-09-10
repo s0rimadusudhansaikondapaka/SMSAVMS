@@ -726,37 +726,48 @@ async function getInvitedVisitors(req, res) {
     const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
     const sql = `
-      SELECT DISTINCT ON (r.id)
-        r.*,
-        v.full_name as visitor_name,
-        v.phone as visitor_phone,
-        v.email as visitor_email,
-        v.gender as visitor_gender,
-        v.photo_url,
-        v.id_type,
-        v.id_number,
-        v.id_card_number,
-        v.id_card_image_url,
-        v.visitor_category,
-        v.company_name,
-        v.vehicle_no as visitor_vehicle_no,
-        u.name as host_name,
-        u.phone as host_phone,
-        u.flat_info as host_flat_info,
-        rv.plate_number as registered_plate_number,
-        rv.vehicle_type as registered_vehicle_type
-      FROM registrations r
-      JOIN visitors v ON r.visitor_id = v.id
-      LEFT JOIN users u ON r.host_id = u.id
-      LEFT JOIN registration_vehicles rv ON rv.registration_id = r.id
-      ${whereSql}
-      ORDER BY r.id DESC, r.created_at DESC
+      SELECT * FROM (
+        SELECT DISTINCT ON (COALESCE(r.pass_code, CAST(r.id AS VARCHAR)))
+          r.*,
+          v.full_name as visitor_name,
+          v.phone as visitor_phone,
+          v.email as visitor_email,
+          v.gender as visitor_gender,
+          v.photo_url,
+          v.id_type,
+          v.id_number,
+          v.id_card_number,
+          v.id_card_image_url,
+          v.visitor_category,
+          v.company_name,
+          v.vehicle_no as visitor_vehicle_no,
+          u.name as host_name,
+          u.phone as host_phone,
+          u.flat_info as host_flat_info,
+          rv.plate_number as registered_plate_number,
+          rv.vehicle_type as registered_vehicle_type
+        FROM registrations r
+        JOIN visitors v ON r.visitor_id = v.id
+        LEFT JOIN users u ON r.host_id = u.id
+        LEFT JOIN registration_vehicles rv ON rv.registration_id = r.id
+        ${whereSql}
+        ORDER BY COALESCE(r.pass_code, CAST(r.id AS VARCHAR)), r.id DESC
+      ) sub
+      ORDER BY sub.id DESC
       LIMIT 150
     `;
 
     const result = await db.query(sql, queryParams);
 
-    const visitors = result.rows.map((row) => {
+    const seenPassCodes = new Set();
+    const uniqueRows = result.rows.filter((row) => {
+      const code = row.pass_code || `id_${row.id}`;
+      if (seenPassCodes.has(code)) return false;
+      seenPassCodes.add(code);
+      return true;
+    });
+
+    const visitors = uniqueRows.map((row) => {
       const computed = computeVisitorStatuses(row);
       const maskedHostPhone = row.host_phone ? row.host_phone.replace(/(\+\d{2}\s?\d{2})\d{4}(\d{4})/, '$1****$2') : '';
       return {
