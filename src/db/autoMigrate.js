@@ -328,6 +328,33 @@ async function runAutoMigrations() {
       console.error('[AutoMigration Notice] Error in devices migration:', dErr.message);
     }
 
+    // 11. Gate Security Incidents Table
+    try {
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS incidents (
+          id SERIAL,
+          incident_id VARCHAR(64),
+          incident_type VARCHAR(100),
+          severity VARCHAR(50),
+          description TEXT,
+          gate_name VARCHAR(100),
+          device_id VARCHAR(100),
+          guard_id INTEGER,
+          guard_name VARCHAR(150),
+          pass_code VARCHAR(100),
+          vehicle_no VARCHAR(100),
+          photo_url TEXT,
+          status VARCHAR(50),
+          resolution_notes TEXT,
+          resolved_by VARCHAR(150),
+          created_at TIMESTAMP,
+          resolved_at TIMESTAMP
+        );
+      `);
+    } catch (incErr) {
+      console.error('[AutoMigration Notice] Error in incidents migration:', incErr.message);
+    }
+
     console.log('[AutoMigration] All DB auto-migrations and seeds completed successfully!');
     return true;
   } catch (err) {

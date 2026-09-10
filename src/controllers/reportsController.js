@@ -7,6 +7,13 @@ async function getDashboardMetrics(req, res) {
     const pendingApprovalsRes = await db.query("SELECT COUNT(*) as count FROM registrations WHERE status IN ('PENDING_L1', 'PENDING_L2', 'PENDING_ACCOMMODATION')");
     const overstaysRes = await db.query("SELECT COUNT(*) as count FROM registrations WHERE status = 'INSIDE_CAMPUS'");
     const vvipCountRes = await db.query("SELECT COUNT(*) as count FROM registrations WHERE is_vvip = true");
+    let openIncidentsCount = 0;
+    try {
+      const incRes = await db.query("SELECT COUNT(*) as count FROM incidents WHERE status = 'OPEN'");
+      openIncidentsCount = parseInt(incRes.rows[0]?.count || 0);
+    } catch (e) {
+      // safe fallback
+    }
 
     res.json({
       success: true,
@@ -16,6 +23,7 @@ async function getDashboardMetrics(req, res) {
         pending_approvals: parseInt(pendingApprovalsRes.rows[0].count || 0),
         overstays: parseInt(overstaysRes.rows[0].count || 0),
         vvip_visits_today: parseInt(vvipCountRes.rows[0].count || 0),
+        open_incidents: openIncidentsCount,
       },
     });
   } catch (err) {
@@ -51,6 +59,9 @@ async function getReportData(req, res) {
         break;
       case 'VVIP':
         queryText = `SELECT r.*, v.full_name as visitor_name, v.vehicle_no, u.name as host_name FROM registrations r JOIN visitors v ON r.visitor_id = v.id LEFT JOIN users u ON r.host_id = u.id WHERE r.is_vvip = true ORDER BY r.id DESC`;
+        break;
+      case 'INCIDENTS':
+        queryText = `SELECT * FROM incidents ORDER BY id DESC LIMIT 500`;
         break;
       case 'EXCEPTION':
         queryText = `

@@ -463,6 +463,122 @@ router.post('/audit-log', authenticateToken, async (req, res) => {
     res.json({ success: true, message: 'Audit event received.' });
   }
 });
+
+// Incident Reports Management
+router.post('/incidents', authenticateToken, async (req, res) => {
+  try {
+    const {
+      incident_type,
+      severity = 'Medium',
+      description,
+      gate_name,
+      device_id,
+      guard_id,
+      guard_name,
+      pass_code,
+      vehicle_no,
+      photo_url
+    } = req.body;
+
+    if (!incident_type || !description) {
+      return res.status(400).json({ success: false, message: 'Incident type and description are required.' });
+    }
+
+    const incidentId = `INC-${Date.now().toString().slice(-6)}`;
+    const result = await db.query(
+      `INSERT INTO incidents 
+        (incident_id, incident_type, severity, description, gate_name, device_id, guard_id, guard_name, pass_code, vehicle_no, photo_url, status, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'OPEN', CURRENT_TIMESTAMP)
+       RETURNING *`,
+      [
+        incidentId,
+        incident_type,
+        severity,
+        description,
+        gate_name || 'NORTH_GATE',
+        device_id || null,
+        guard_id || (req.user ? req.user.id : null),
+        guard_name || (req.user ? req.user.name : 'Security Guard'),
+        pass_code || null,
+        vehicle_no || null,
+        photo_url || null
+      ]
+    );
+
+    const { logSystemAction } = require('../services/auditLogger');
+    try {
+      await logSystemAction(
+        req.user ? req.user.id : null,
+        'REPORT_INCIDENT',
+        'GATE_INCIDENT',
+        result.rows[0]?.id || null,
+        `Incident [${incidentId}] - ${incident_type} (${severity}) reported at ${gate_name || 'Gate'}`
+      );
+    } catch (aErr) {}
+
+    return res.status(201).json({
+      success: true,
+      message: `Incident report [${incidentId}] logged and escalated to Security Supervisor.`,
+      incident: result.rows[0]
+    });
+  } catch (err) {
+    console.error('[Incident Create Error]:', err);
+    return res.status(500).json({ success: false, message: 'Failed to record incident report.' });
+  }
+});
+
+router.get('/incidents', authenticateToken, async (req, res) => {
+  try {
+    const { gate_name, status, severity } = req.query;
+    let sql = 'SELECT * FROM incidents WHERE 1=1';
+    const params = [];
+
+    if (gate_name && gate_name !== 'ALL') {
+      params.push(gate_name);
+      sql += ` AND UPPER(gate_name) = UPPER($${params.length})`;
+    }
+    if (status && status !== 'ALL') {
+      params.push(status);
+      sql += ` AND UPPER(status) = UPPER($${params.length})`;
+    }
+    if (severity && severity !== 'ALL') {
+      params.push(severity);
+      sql += ` AND UPPER(severity) = UPPER($${params.length})`;
+    }
+
+    sql += ' ORDER BY created_at DESC LIMIT 50';
+    const result = await db.query(sql, params);
+    return res.json({ success: true, incidents: result.rows });
+  } catch (err) {
+    console.error('[Incident Fetch Error]:', err);
+    return res.status(500).json({ success: false, message: 'Failed to fetch incident reports.' });
+  }
+});
+
+router.patch('/incidents/:id/resolve', authenticateToken, requireRoles('SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { resolution_notes } = req.body;
+    const resolvedBy = req.user ? req.user.name : 'Security Supervisor';
+
+    const result = await db.query(
+      `UPDATE incidents 
+       SET status = 'RESOLVED', resolution_notes = $1, resolved_by = $2, resolved_at = CURRENT_TIMESTAMP
+       WHERE id = $3 RETURNING *`,
+      [resolution_notes || 'Resolved by security team', resolvedBy, id]
+    );
+
+    return res.json({
+      success: true,
+      message: 'Incident marked as RESOLVED.',
+      incident: result.rows[0]
+    });
+  } catch (err) {
+    console.error('[Incident Resolve Error]:', err);
+    return res.status(500).json({ success: false, message: 'Failed to resolve incident.' });
+  }
+});
+
 router.get('/gate/spot-queue', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), getSpotRegistrationsQueue);
 router.post('/gate/assign-host', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), assignHostToSpotRegistration);
 router.get('/gate/recent-lookups', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), getRecentGateLookups);
