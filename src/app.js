@@ -14,10 +14,14 @@ app.set('trust proxy', true);
 const PORT = process.env.PORT || 5004;
 
 const defaultAllowedOrigins = [
+  'https://guard-tq11.onrender.com',
   'https://vms-qrf6.onrender.com',
+  'https://smsavmsserver.onrender.com',
   'http://localhost:3000',
   'http://localhost:5173',
-  'http://localhost:5004'
+  'http://localhost:5004',
+  'capacitor://localhost',
+  'http://localhost'
 ];
 
 const envOrigins = (process.env.CORS_ORIGIN || process.env.FRONTEND_URL || '')
@@ -32,7 +36,12 @@ const corsOptions = {
   origin: (origin, callback) => {
     if (!origin) return callback(null, true);
     const cleanOrigin = origin.replace(/\/$/, '');
-    if (allowedOrigins.includes('*') || allowedOrigins.includes(cleanOrigin)) {
+    if (
+      allowedOrigins.includes('*') ||
+      allowedOrigins.includes(cleanOrigin) ||
+      cleanOrigin.endsWith('.onrender.com') ||
+      cleanOrigin.includes('localhost')
+    ) {
       return callback(null, true);
     }
     // Fallback to allow request
@@ -40,7 +49,7 @@ const corsOptions = {
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
 };
 
 app.use(cors(corsOptions));
