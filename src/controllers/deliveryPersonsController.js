@@ -15,6 +15,7 @@ async function ensureDeliveryTable() {
         id_type VARCHAR(100) DEFAULT 'Aadhaar',
         id_number VARCHAR(100),
         photo_url TEXT,
+        id_card_image_url TEXT,
         vehicle_type VARCHAR(50) DEFAULT 'Two Wheeler',
         vehicle_number VARCHAR(100),
         destination_host_id INT REFERENCES users(id) ON DELETE SET NULL,
@@ -32,6 +33,24 @@ async function ensureDeliveryTable() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+
+    try {
+      await db.query(`ALTER TABLE delivery_persons ADD COLUMN IF NOT EXISTS id_card_image_url TEXT;`);
+    } catch (e) {}
+
+    const countRes = await db.query('SELECT COUNT(*) as count FROM delivery_persons');
+    if (parseInt(countRes.rows[0]?.count || 0) === 0) {
+      console.log('[Delivery Module] Seeding sample delivery persons with photos & ID proofs...');
+      await db.query(`
+        INSERT INTO delivery_persons 
+          (guid, full_name, phone, company_name, id_type, id_number, photo_url, id_card_image_url, vehicle_type, vehicle_number, status, current_visit_status, last_entry_at)
+        VALUES 
+          ('DP-001', 'Ramu Swiggy Delivery', '+91 9845011223', 'Swiggy', 'Driving License', 'DL-04-2021-008899', 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=300', 'https://images.unsplash.com/photo-1589829545856-d10d557cf95f?w=600', 'Two Wheeler', 'KA-04-ER-1234', 'APPROVED', 'OUT', NULL),
+          ('DP-002', 'Kiran Kumar (Amazon Courier)', '+91 9876543234', 'Amazon', 'Aadhaar', '3344-5566-7788', 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=300', 'https://images.unsplash.com/photo-1544717305-2782549b5136?w=600', 'Two Wheeler', 'KA-01-AM-5566', 'APPROVED', 'IN', CURRENT_TIMESTAMP - INTERVAL '25 minutes'),
+          ('DP-003', 'Mahesh Reddy (Zomato Partner)', '+91 9886112244', 'Zomato', 'Aadhaar', '9988-7766-5544', 'https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?w=300', 'https://images.unsplash.com/photo-1584438784894-089d6a62b8fa?w=600', 'Two Wheeler', 'KA-53-ZM-7890', 'APPROVED', 'OUT', NULL),
+          ('DP-004', 'Suresh Babu (DHL Express)', '+91 9900334455', 'DHL Express', 'Voter ID', 'VTR-KA-998822', 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=300', 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', 'Van', 'KA-03-DH-9090', 'APPROVED', 'IN', CURRENT_TIMESTAMP - INTERVAL '135 minutes')
+      `);
+    }
   } catch (err) {
     console.error('[Delivery Module] Error initializing table:', err);
   }

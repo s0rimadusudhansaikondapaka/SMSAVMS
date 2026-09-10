@@ -475,7 +475,7 @@ async function processGateMovement(req, res) {
 async function getVisitorsInsideCampus(req, res) {
   try {
     const result = await db.query(
-      `SELECT r.*, v.full_name as visitor_name, v.phone as visitor_phone, v.photo_url, v.visitor_category, u.name as host_name 
+      `SELECT r.*, v.full_name as visitor_name, v.phone as visitor_phone, v.photo_url, v.id_card_image_url, v.id_type, v.id_number, v.id_card_number, v.visitor_category, u.name as host_name 
        FROM registrations r 
        JOIN visitors v ON r.visitor_id = v.id 
        LEFT JOIN users u ON r.host_id = u.id 
