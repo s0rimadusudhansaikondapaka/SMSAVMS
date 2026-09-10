@@ -77,8 +77,30 @@ async function runAutoMigrations() {
       ADD COLUMN IF NOT EXISTS approved_by_name VARCHAR(150),
       ADD COLUMN IF NOT EXISTS approved_by_role VARCHAR(50),
       ADD COLUMN IF NOT EXISTS family_member_id INT,
-      ADD COLUMN IF NOT EXISTS relationship_to_resident VARCHAR(100);
+      ADD COLUMN IF NOT EXISTS relationship_to_resident VARCHAR(100),
+      ADD COLUMN IF NOT EXISTS lifecycle_status VARCHAR(50) DEFAULT 'Yet to Arrive',
+      ADD COLUMN IF NOT EXISTS presence_status VARCHAR(50) DEFAULT 'currently_outside',
+      ADD COLUMN IF NOT EXISTS first_entry_at TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS last_entry_at TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS last_exit_at TIMESTAMP;
     `);
+
+    try {
+      await db.query(`
+        UPDATE registrations 
+        SET lifecycle_status = CASE 
+          WHEN status = 'INSIDE_CAMPUS' THEN 'CHECKED-IN'
+          WHEN status = 'CHECKED_OUT' THEN 'CHECKED-OUT'
+          ELSE 'Yet to Arrive'
+        END,
+        presence_status = CASE 
+          WHEN status = 'INSIDE_CAMPUS' AND valid_until < CURRENT_TIMESTAMP THEN 'over_stayed'
+          WHEN status = 'INSIDE_CAMPUS' THEN 'currently_inside'
+          ELSE 'currently_outside'
+        END
+        WHERE lifecycle_status IS NULL OR presence_status IS NULL OR lifecycle_status = '';
+      `);
+    } catch (bfErr) {}
 
     // 4. Resident Family Members Table
     try {

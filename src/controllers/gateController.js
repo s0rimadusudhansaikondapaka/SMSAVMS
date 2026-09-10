@@ -1,6 +1,55 @@
 const db = require('../config/db');
 const { broadcastSyncEvent } = require('../sockets/syncServer');
 const { logSystemAction } = require('../services/auditLogger');
+const { checkSystematicCheckouts } = require('./expiryService');
+
+function computeVisitorStatuses(reg) {
+  const now = new Date();
+  const validUntil = new Date(reg.valid_until);
+  const departureTimePassed = now > validUntil;
+
+  // Category 1: Lifecycle Status (Yet to Arrive, CHECKED-IN, CHECKED-OUT)
+  let lifecycleStatus = 'Yet to Arrive';
+  if (reg.lifecycle_status) {
+    lifecycleStatus = reg.lifecycle_status;
+  } else if (reg.status === 'CHECKED_OUT') {
+    lifecycleStatus = 'CHECKED-OUT';
+  } else if (reg.status === 'INSIDE_CAMPUS' || reg.first_entry_at) {
+    lifecycleStatus = 'CHECKED-IN';
+  } else if (['APPROVED', 'PENDING_L1', 'PENDING_L2'].includes(reg.status)) {
+    lifecycleStatus = 'Yet to Arrive';
+  }
+
+  // Category 2: Physical Presence Status (currently_inside, currently_outside, over_stayed)
+  let presenceStatus = 'currently_outside';
+  if (reg.status === 'INSIDE_CAMPUS' || reg.presence_status === 'currently_inside' || reg.presence_status === 'over_stayed') {
+    if (departureTimePassed) {
+      presenceStatus = 'over_stayed';
+    } else {
+      presenceStatus = 'currently_inside';
+    }
+  } else {
+    presenceStatus = 'currently_outside';
+  }
+
+  // Systematic checkout rule: If currently_outside and estimated departure time has passed while checked-in
+  if (presenceStatus === 'currently_outside' && departureTimePassed && lifecycleStatus === 'CHECKED-IN') {
+    lifecycleStatus = 'CHECKED-OUT';
+  }
+
+  // IN button rule: enabled only till Visitor's estimated departure time
+  const isInEnabled = !departureTimePassed && presenceStatus !== 'currently_inside';
+  // OUT button rule: enabled if Visitor's status is 'currently_inside' or 'over_stayed'
+  const isOutEnabled = presenceStatus === 'currently_inside' || presenceStatus === 'over_stayed';
+
+  return {
+    lifecycle_status: lifecycleStatus,
+    presence_status: presenceStatus,
+    departure_time_passed: departureTimePassed,
+    is_in_enabled: isInEnabled,
+    is_out_enabled: isOutEnabled,
+  };
+}
 
 function isPermanentPass(reg) {
   if (!reg) return false;
@@ -173,10 +222,13 @@ async function verifyGatePass(req, res) {
       egressStatus = 'OVERSTAY';
     }
 
+    const computedStatuses = computeVisitorStatuses(reg);
+
     res.json({
       success: true,
       pass: {
         ...reg,
+        ...computedStatuses,
         host_phone_masked: maskedHostPhone,
         allowed_gates: allowedGates,
         restricted_gates: allGates.filter((g) => !allowedGates.includes(g)),
@@ -272,16 +324,37 @@ async function processGateMovement(req, res) {
         return res.status(400).json({ success: false, message: `Cannot process IN entry. Pass status is ${reg.status}` });
       }
 
-      // Check if current time is within allowed entry to departure end window for non-permanent passes
-      if (!isPerm && (now < windowStart || now > windowEnd)) {
+      // Rule 7: IN button should be only enabled till the Visitor's estimated departure time. After that IN button should be disabled.
+      if (!isPerm && now > validUntil) {
+        await db.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `Estimated departure time (${validUntil.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}) has passed. IN entry is disabled.`,
+        });
+      }
+
+      // Check if current time is before allowed arrival window
+      if (!isPerm && now < windowStart) {
         const isAuthorizedGuard = ['GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN', 'HOD'].includes(req.user?.role);
         if (!req.body.override_expired && !isAuthorizedGuard) {
           await db.query('ROLLBACK');
           return res.status(400).json({
             success: false,
-            message: `Entry window expired. Re-entry allowed until departure window end (${windowEnd.toLocaleString()}).`,
+            message: `Entry window not yet open. Earliest allowed entry: ${windowStart.toLocaleString()}.`,
           });
         }
+      }
+    }
+
+    if (direction === 'OUT') {
+      // Rule 8: OUT button should be enabled if Visitor's status is 'currently_inside'
+      const isInside = reg.status === 'INSIDE_CAMPUS' || reg.presence_status === 'currently_inside' || reg.presence_status === 'over_stayed';
+      if (!isInside && !isPerm && reg.status === 'CHECKED_OUT') {
+        await db.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Visitor is already marked as CHECKED-OUT.',
+        });
       }
     }
 
@@ -303,23 +376,71 @@ async function processGateMovement(req, res) {
       [nextLogId, gateLogGuid, registration_id, reg.visitor_id, gate_name, direction, totalCount, menCount, womenCount, kidsCount, boysCount, girlsCount, vehicle_no || '', req.user.id, remarks || '']
     );
 
-    // Permanent Passcodes for Maids/Frequent Visitors reset to APPROVED upon exit for repeated daily entry!
-    let newStatus = direction === 'IN' ? 'INSIDE_CAMPUS' : 'CHECKED_OUT';
-    if (direction === 'OUT' && isPerm) {
-      newStatus = 'APPROVED'; // Resets to APPROVED so permanent passcode works every day!
+    // Rule 5, 9, 10:
+    // IN: lifecycle_status = 'CHECKED-IN', presence_status = 'currently_inside', status = 'INSIDE_CAMPUS'
+    // OUT: guest going out is just 'currently_outside', lifecycle remains 'CHECKED-IN' (unless departure time already passed -> 'CHECKED-OUT')
+    let newStatus = reg.status;
+    let newLifecycle = reg.lifecycle_status || 'CHECKED-IN';
+    let newPresence = 'currently_inside';
+    let firstEntryAt = reg.first_entry_at;
+    let lastEntryAt = reg.last_entry_at;
+    let lastExitAt = reg.last_exit_at;
+
+    if (direction === 'IN') {
+      newStatus = 'INSIDE_CAMPUS';
+      newLifecycle = 'CHECKED-IN';
+      newPresence = 'currently_inside';
+      if (!firstEntryAt) firstEntryAt = now;
+      lastEntryAt = now;
+    } else if (direction === 'OUT') {
+      newPresence = 'currently_outside';
+      lastExitAt = now;
+      if (isPerm) {
+        newStatus = 'APPROVED';
+        newLifecycle = 'CHECKED-IN';
+      } else {
+        // Rule 10: If guest is going OUT and estimated departure time is passed, systematically check them OUT
+        if (now > validUntil) {
+          newStatus = 'CHECKED_OUT';
+          newLifecycle = 'CHECKED-OUT';
+        } else {
+          // Temporary Exit (Rule 9): Still CHECKED-IN lifecycle, but currently_outside.
+          // Set status = 'APPROVED' to allow re-entry before valid_until.
+          newStatus = 'APPROVED';
+          newLifecycle = 'CHECKED-IN';
+        }
+      }
     }
 
     await db.query(
-      `UPDATE registrations SET status = $1, adult_men_count = $2, adult_women_count = $3, children_count = $4, boys_count = $5, girls_count = $6, person_count = $7 WHERE id = $8`,
-      [newStatus, menCount, womenCount, kidsCount, boysCount, girlsCount, totalCount, registration_id]
+      `UPDATE registrations 
+       SET status = $1, 
+           lifecycle_status = $2, 
+           presence_status = $3, 
+           first_entry_at = COALESCE(first_entry_at, $4),
+           last_entry_at = COALESCE($5, last_entry_at),
+           last_exit_at = COALESCE($6, last_exit_at),
+           adult_men_count = $7, 
+           adult_women_count = $8, 
+           children_count = $9, 
+           boys_count = $10, 
+           girls_count = $11, 
+           person_count = $12,
+           vehicle_no = COALESCE($13, vehicle_no)
+       WHERE id = $14`,
+      [newStatus, newLifecycle, newPresence, firstEntryAt, lastEntryAt, lastExitAt, menCount, womenCount, kidsCount, boysCount, girlsCount, totalCount, vehicle_no || null, registration_id]
     );
+
+    if (vehicle_no) {
+      await db.query(`UPDATE visitors SET vehicle_no = $1 WHERE id = $2`, [vehicle_no, reg.visitor_id]);
+    }
 
     await logSystemAction(req, {
       action: `GATE_${direction}`,
       entity_type: 'REGISTRATION',
       entity_id: registration_id,
       status: 'SUCCESS',
-      remarks: `Gate ${direction} recorded at ${gate_name} for ${reg.visitor_name} (Pass: ${reg.pass_code}). Breakdown - Men: ${menCount}, Women: ${womenCount}, Children: ${kidsCount}`
+      remarks: `Gate ${direction} recorded at ${gate_name} for ${reg.visitor_name} (Pass: ${reg.pass_code}). Lifecycle: ${newLifecycle}, Presence: ${newPresence}. Breakdown - Men: ${menCount}, Women: ${womenCount}, Children: ${kidsCount}`
     });
 
     await db.query('COMMIT');
@@ -336,13 +457,19 @@ async function processGateMovement(req, res) {
       adult_women_count: womenCount,
       children_count: kidsCount,
       status: newStatus,
+      lifecycle_status: newLifecycle,
+      presence_status: newPresence,
       timestamp: new Date(),
     });
 
     res.json({
       success: true,
-      message: `Visitor successfully checked ${direction} at ${gate_name}${reg.is_permanent_pass ? ' (Permanent Passcode Reset to APPROVED for Next Entry)' : ''}`,
+      message: direction === 'IN' 
+        ? `Visitor successfully checked IN at ${gate_name}. Status: Inside Campus` 
+        : `Visitor stepped OUT at ${gate_name}. Status: ${newLifecycle} (${newPresence})`,
       status: newStatus,
+      lifecycle_status: newLifecycle,
+      presence_status: newPresence,
       gate_log: logRes.rows[0],
     });
   } catch (err) {
@@ -538,6 +665,196 @@ async function getGatewiseStatsAndSelfRegistered(req, res) {
     console.error('Error fetching gatewise stats:', err);
     res.status(500).json({ success: false, message: 'Failed to fetch gatewise stats.' });
   }
+// 4. Get Invited Visitors (+8 hours upcoming & already checked-in) with search
+async function getInvitedVisitors(req, res) {
+  try {
+    // Run systematic checkouts check first
+    try {
+      await checkSystematicCheckouts();
+    } catch (e) {
+      console.warn('Systematic checkouts check warning:', e.message);
+    }
+
+    const { search = '' } = req.query;
+    const cleanSearch = String(search).trim();
+
+    let queryParams = [];
+    let whereClauses = [];
+
+    // Filter 1: Valid time window (+8 hours upcoming) OR already checked-in visitors
+    // Upcoming: valid_from <= (NOW() + INTERVAL '8 hours') AND valid_until >= (NOW() - INTERVAL '2 hours')
+    // Checked-in: lifecycle_status = 'CHECKED-IN' OR status = 'INSIDE_CAMPUS' OR presence_status = 'currently_inside' OR first_entry_at IS NOT NULL
+    whereClauses.push(`(
+      (r.valid_from <= (NOW() + INTERVAL '8 hours') AND r.valid_until >= (NOW() - INTERVAL '2 hours') AND r.status IN ('APPROVED', 'PENDING_L1', 'PENDING_L2', 'INSIDE_CAMPUS', 'CHECKED_OUT'))
+      OR r.lifecycle_status = 'CHECKED-IN'
+      OR r.status = 'INSIDE_CAMPUS'
+      OR r.presence_status = 'currently_inside'
+      OR r.first_entry_at IS NOT NULL
+    )`);
+
+    // Filter 2: Search by visitor name, last 4 digits phone, or vehicle number, or passcode
+    if (cleanSearch) {
+      queryParams.push(`%${cleanSearch}%`);
+      const searchIdx = queryParams.length;
+      whereClauses.push(`(
+        v.full_name ILIKE $${searchIdx}
+        OR v.phone ILIKE $${searchIdx}
+        OR v.phone LIKE '%' || $${searchIdx}
+        OR COALESCE(v.vehicle_no, '') ILIKE $${searchIdx}
+        OR COALESCE(r.vehicle_no, '') ILIKE $${searchIdx}
+        OR COALESCE(rv.plate_number, '') ILIKE $${searchIdx}
+        OR r.pass_code ILIKE $${searchIdx}
+      )`);
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+    const sql = `
+      SELECT DISTINCT ON (r.id)
+        r.*,
+        v.full_name as visitor_name,
+        v.phone as visitor_phone,
+        v.email as visitor_email,
+        v.gender as visitor_gender,
+        v.photo_url,
+        v.id_type,
+        v.id_number,
+        v.id_card_number,
+        v.id_card_image_url,
+        v.visitor_category,
+        v.company_name,
+        v.vehicle_no as visitor_vehicle_no,
+        u.name as host_name,
+        u.phone as host_phone,
+        u.flat_info as host_flat_info,
+        rv.plate_number as registered_plate_number,
+        rv.vehicle_type as registered_vehicle_type
+      FROM registrations r
+      JOIN visitors v ON r.visitor_id = v.id
+      LEFT JOIN users u ON r.host_id = u.id
+      LEFT JOIN registration_vehicles rv ON rv.registration_id = r.id
+      ${whereSql}
+      ORDER BY r.id DESC, r.created_at DESC
+      LIMIT 150
+    `;
+
+    const result = await db.query(sql, queryParams);
+
+    const visitors = result.rows.map((row) => {
+      const computed = computeVisitorStatuses(row);
+      const maskedHostPhone = row.host_phone ? row.host_phone.replace(/(\+\d{2}\s?\d{2})\d{4}(\d{4})/, '$1****$2') : '';
+      return {
+        ...row,
+        ...computed,
+        host_phone_masked: maskedHostPhone,
+        vehicle_details: row.vehicle_no || row.registered_plate_number || row.visitor_vehicle_no || 'None',
+      };
+    });
+
+    res.json({
+      success: true,
+      count: visitors.length,
+      visitors,
+    });
+  } catch (err) {
+    console.error('Error fetching invited visitors:', err);
+    res.status(500).json({ success: false, message: 'Failed to fetch invited visitors.' });
+  }
+}
+
+// 5. Guard restricted edit: ONLY edit 'number of people' and 'vehicle details'
+async function updateVisitorGateDetails(req, res) {
+  const { id } = req.params;
+  const { adult_men_count, adult_women_count, boys_count, girls_count, children_count, vehicle_no, vehicle_type } = req.body;
+
+  try {
+    const regRes = await db.query(
+      `SELECT r.*, v.id as visitor_id, v.full_name as visitor_name FROM registrations r JOIN visitors v ON r.visitor_id = v.id WHERE r.id = $1`,
+      [id]
+    );
+
+    if (regRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Registration not found.' });
+    }
+
+    const reg = regRes.rows[0];
+
+    const men = adult_men_count !== undefined ? Math.max(0, parseInt(adult_men_count) || 0) : reg.adult_men_count;
+    const women = adult_women_count !== undefined ? Math.max(0, parseInt(adult_women_count) || 0) : reg.adult_women_count;
+    const boys = boys_count !== undefined ? Math.max(0, parseInt(boys_count) || 0) : (reg.boys_count || 0);
+    const girls = girls_count !== undefined ? Math.max(0, parseInt(girls_count) || 0) : (reg.girls_count || 0);
+    const kids = children_count !== undefined ? Math.max(0, parseInt(children_count) || 0) : (boys + girls);
+    const total = men + women + boys + girls;
+
+    const newVehicleNo = vehicle_no !== undefined ? String(vehicle_no).trim() : reg.vehicle_no;
+
+    await db.query(
+      `UPDATE registrations 
+       SET adult_men_count = $1, 
+           adult_women_count = $2, 
+           children_count = $3, 
+           boys_count = $4, 
+           girls_count = $5, 
+           person_count = $6,
+           vehicle_no = $7
+       WHERE id = $8`,
+      [men, women, kids, boys, girls, total, newVehicleNo, id]
+    );
+
+    if (newVehicleNo !== undefined) {
+      await db.query(`UPDATE visitors SET vehicle_no = $1 WHERE id = $2`, [newVehicleNo, reg.visitor_id]);
+      
+      const rvCheck = await db.query(`SELECT id FROM registration_vehicles WHERE registration_id = $1 LIMIT 1`, [id]);
+      if (rvCheck.rows.length > 0) {
+        await db.query(
+          `UPDATE registration_vehicles SET plate_number = $1, vehicle_type = COALESCE($2, vehicle_type) WHERE id = $3`,
+          [newVehicleNo, vehicle_type || null, rvCheck.rows[0].id]
+        );
+      } else if (newVehicleNo) {
+        await db.query(
+          `INSERT INTO registration_vehicles (registration_id, plate_number, vehicle_type) VALUES ($1, $2, $3)`,
+          [id, newVehicleNo, vehicle_type || 'FOUR_WHEELER']
+        );
+      }
+    }
+
+    await logSystemAction(req, {
+      action: 'GUARD_EDIT_VISITOR_DETAILS',
+      entity_type: 'REGISTRATION',
+      entity_id: id,
+      status: 'SUCCESS',
+      remarks: `Guard updated people count (Men:${men}, Women:${women}, Kids:${kids}, Total:${total}) and vehicle (${newVehicleNo || 'None'}) for ${reg.visitor_name}`
+    });
+
+    broadcastSyncEvent('VISITOR_DETAILS_UPDATED', {
+      registration_id: id,
+      total_count: total,
+      adult_men_count: men,
+      adult_women_count: women,
+      children_count: kids,
+      boys_count: boys,
+      girls_count: girls,
+      vehicle_no: newVehicleNo,
+    });
+
+    res.json({
+      success: true,
+      message: 'Visitor details updated successfully.',
+      updated: {
+        id,
+        adult_men_count: men,
+        adult_women_count: women,
+        children_count: kids,
+        boys_count: boys,
+        girls_count: girls,
+        person_count: total,
+        vehicle_no: newVehicleNo,
+      }
+    });
+  } catch (err) {
+    console.error('Error updating visitor gate details:', err);
+    res.status(500).json({ success: false, message: 'Failed to update visitor details.' });
+  }
 }
 
 module.exports = {
@@ -548,4 +865,6 @@ module.exports = {
   assignHostToSpotRegistration,
   getRecentGateLookups,
   getGatewiseStatsAndSelfRegistered,
+  getInvitedVisitors,
+  updateVisitorGateDetails,
 };

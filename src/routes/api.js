@@ -27,7 +27,9 @@ const {
   getSpotRegistrationsQueue,
   assignHostToSpotRegistration,
   getRecentGateLookups,
-  getGatewiseStatsAndSelfRegistered
+  getGatewiseStatsAndSelfRegistered,
+  getInvitedVisitors,
+  updateVisitorGateDetails
 } = require('../controllers/gateController');
 const { checkExpiredRequests } = require('../controllers/expiryService');
 const { 
@@ -583,6 +585,8 @@ router.get('/gate/spot-queue', authenticateToken, requireRoles('GUARD', 'SUPERVI
 router.post('/gate/assign-host', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), assignHostToSpotRegistration);
 router.get('/gate/recent-lookups', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), getRecentGateLookups);
 router.get('/gate/gatewise-stats', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), getGatewiseStatsAndSelfRegistered);
+router.get('/gate/invited-visitors', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), getInvitedVisitors);
+router.patch('/gate/visitors/:id/details', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), updateVisitorGateDetails);
 
 /**
  * @openapi

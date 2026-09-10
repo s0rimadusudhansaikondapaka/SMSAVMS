@@ -102,28 +102,81 @@ async function checkReminders() {
   }
 }
 
-// Start the periodic expiry check service (runs every 5 minutes)
+// 4. Systematic checkout: If visitor is currently_outside and valid_until (Estimated Departure Time) has passed, they are systematically CHECKED-OUT.
+// Also, if visitor is inside campus and valid_until has passed, update presence_status = 'over_stayed'.
+async function checkSystematicCheckouts() {
+  try {
+    // 4A. Visitors currently_outside whose Estimated Departure Time (valid_until) has passed
+    const checkoutRes = await db.query(
+      `UPDATE registrations 
+       SET lifecycle_status = 'CHECKED-OUT',
+           presence_status = 'currently_outside',
+           status = 'CHECKED_OUT'
+       WHERE (presence_status = 'currently_outside' OR status != 'INSIDE_CAMPUS')
+       AND lifecycle_status = 'CHECKED-IN'
+       AND valid_until < CURRENT_TIMESTAMP
+       RETURNING id, pass_code`
+    );
+
+    if (checkoutRes.rows.length > 0) {
+      console.log(`[Expiry Service] Systematic CHECKED-OUT executed for ${checkoutRes.rows.length} registration(s):`, checkoutRes.rows.map(r => r.pass_code));
+      for (const reg of checkoutRes.rows) {
+        await db.query(
+          `INSERT INTO audit_logs (action, entity_type, entity_id, remarks) VALUES ($1, $2, $3, $4)`,
+          ['SYSTEMATIC_CHECKOUT', 'REGISTRATION', reg.id, `Visitor systematically CHECKED-OUT: estimated departure time elapsed while currently outside campus`]
+        );
+      }
+      broadcastSyncEvent('SYSTEMATIC_CHECKOUT', { count: checkoutRes.rows.length, passes: checkoutRes.rows.map(r => r.pass_code) });
+    }
+
+    // 4B. Visitors currently_inside whose valid_until has passed -> presence_status = 'over_stayed'
+    const overstayRes = await db.query(
+      `UPDATE registrations 
+       SET presence_status = 'over_stayed'
+       WHERE (status = 'INSIDE_CAMPUS' OR presence_status = 'currently_inside')
+       AND presence_status != 'over_stayed'
+       AND valid_until < CURRENT_TIMESTAMP
+       RETURNING id, pass_code`
+    );
+
+    if (overstayRes.rows.length > 0) {
+      console.log(`[Expiry Service] Updated presence to over_stayed for ${overstayRes.rows.length} visitor(s):`, overstayRes.rows.map(r => r.pass_code));
+      broadcastSyncEvent('VISITOR_OVERSTAYED', { count: overstayRes.rows.length, passes: overstayRes.rows.map(r => r.pass_code) });
+    }
+
+    return checkoutRes.rows;
+  } catch (err) {
+    console.error('[Expiry Service] Error executing systematic checkout:', err);
+    return [];
+  }
+}
+
+// Start the periodic expiry check service (runs every 2 minutes for fast systematic checkout & reminders)
 function startExpiryService() {
-  console.log('[Expiry Service] Starting periodic request expiry & reminder service (every 5 minutes)...');
+  console.log('[Expiry Service] Starting periodic request expiry, reminder & systematic checkout service...');
   
   // Run immediately on startup
   setTimeout(async () => {
     await checkExpiredRequests();
     await checkHostTimeout();
     await checkReminders();
-  }, 10000); // 10 second delay after startup
+    await checkSystematicCheckouts();
+  }, 5000); // 5 second delay after startup
   
-  // Then run every 5 minutes
+  // Then run every 2 minutes
   setInterval(async () => {
     await checkExpiredRequests();
     await checkHostTimeout();
     await checkReminders();
-  }, 5 * 60 * 1000);
+    await checkSystematicCheckouts();
+  }, 2 * 60 * 1000);
 }
 
 module.exports = {
   checkExpiredRequests,
   checkHostTimeout,
   checkReminders,
+  checkSystematicCheckouts,
   startExpiryService,
 };
+
