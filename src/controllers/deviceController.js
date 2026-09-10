@@ -42,12 +42,12 @@ exports.deviceAuth = async (req, res) => {
       [device.id]
     );
 
-    // Fetch active on-duty guards for this device
+    // Fetch active on-duty guards for this device (strictly deduplicated by guard_id)
     const dutyRes = await db.query(
-      `SELECT id, device_id, guard_id, guard_name, guard_phone, guard_code, duty_date, checked_in_at, status, gate_name
+      `SELECT DISTINCT ON (guard_id) id, device_id, guard_id, guard_name, guard_phone, guard_code, duty_date, checked_in_at, status, gate_name
        FROM device_duty_sessions
-       WHERE device_id = $1 AND status = 'ON_DUTY'
-       ORDER BY checked_in_at DESC`,
+       WHERE UPPER(device_id) = UPPER($1) AND status = 'ON_DUTY'
+       ORDER BY guard_id, checked_in_at DESC`,
       [device.device_id]
     );
 
@@ -95,10 +95,10 @@ exports.getOnDutyGuards = async (req, res) => {
 
     const cleanDeviceId = deviceId.trim().toUpperCase();
     const dutyRes = await db.query(
-      `SELECT id, device_id, guard_id, guard_name, guard_phone, guard_code, duty_date, checked_in_at, status, gate_name
+      `SELECT DISTINCT ON (guard_id) id, device_id, guard_id, guard_name, guard_phone, guard_code, duty_date, checked_in_at, status, gate_name
        FROM device_duty_sessions
        WHERE UPPER(device_id) = $1 AND status = 'ON_DUTY'
-       ORDER BY checked_in_at DESC`,
+       ORDER BY guard_id, checked_in_at DESC`,
       [cleanDeviceId]
     );
 
@@ -148,8 +148,8 @@ exports.dutyCheckIn = async (req, res) => {
 
     if (existing.rows.length > 0) {
       const allActive = await db.query(
-        `SELECT id, device_id, guard_id, guard_name, guard_phone, guard_code, duty_date, checked_in_at, status, gate_name
-         FROM device_duty_sessions WHERE UPPER(device_id) = $1 AND status = 'ON_DUTY' ORDER BY checked_in_at DESC`,
+        `SELECT DISTINCT ON (guard_id) id, device_id, guard_id, guard_name, guard_phone, guard_code, duty_date, checked_in_at, status, gate_name
+         FROM device_duty_sessions WHERE UPPER(device_id) = $1 AND status = 'ON_DUTY' ORDER BY guard_id, checked_in_at DESC`,
         [cleanDeviceId]
       );
       return res.json({
@@ -158,6 +158,12 @@ exports.dutyCheckIn = async (req, res) => {
         on_duty_guards: allActive.rows
       });
     }
+
+    // Close any previous session for this guard before creating new session
+    await db.query(
+      `UPDATE device_duty_sessions SET status = 'OFF_DUTY', checked_out_at = CURRENT_TIMESTAMP WHERE UPPER(device_id) = $1 AND guard_id = $2 AND status = 'ON_DUTY'`,
+      [cleanDeviceId, guard.id]
+    );
 
     // Insert new duty session
     await db.query(
@@ -168,8 +174,8 @@ exports.dutyCheckIn = async (req, res) => {
 
     // Return updated active roster
     const allActive = await db.query(
-      `SELECT id, device_id, guard_id, guard_name, guard_phone, guard_code, duty_date, checked_in_at, status, gate_name
-       FROM device_duty_sessions WHERE UPPER(device_id) = $1 AND status = 'ON_DUTY' ORDER BY checked_in_at DESC`,
+      `SELECT DISTINCT ON (guard_id) id, device_id, guard_id, guard_name, guard_phone, guard_code, duty_date, checked_in_at, status, gate_name
+       FROM device_duty_sessions WHERE UPPER(device_id) = $1 AND status = 'ON_DUTY' ORDER BY guard_id, checked_in_at DESC`,
       [cleanDeviceId]
     );
 
@@ -214,8 +220,8 @@ exports.dutyCheckOut = async (req, res) => {
     }
 
     const allActive = await db.query(
-      `SELECT id, device_id, guard_id, guard_name, guard_phone, guard_code, duty_date, checked_in_at, status, gate_name
-       FROM device_duty_sessions WHERE UPPER(device_id) = $1 AND status = 'ON_DUTY' ORDER BY checked_in_at DESC`,
+      `SELECT DISTINCT ON (guard_id) id, device_id, guard_id, guard_name, guard_phone, guard_code, duty_date, checked_in_at, status, gate_name
+       FROM device_duty_sessions WHERE UPPER(device_id) = $1 AND status = 'ON_DUTY' ORDER BY guard_id, checked_in_at DESC`,
       [cleanDeviceId]
     );
 

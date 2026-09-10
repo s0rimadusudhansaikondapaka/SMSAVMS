@@ -334,8 +334,24 @@ async function runAutoMigrations() {
         }
       }
 
+      // Clean up any duplicate ON_DUTY records for the same guard on the same device
+      try {
+        await db.query(`
+          UPDATE device_duty_sessions
+          SET status = 'OFF_DUTY', checked_out_at = CURRENT_TIMESTAMP
+          WHERE id NOT IN (
+            SELECT DISTINCT ON (UPPER(device_id), guard_id) id
+            FROM device_duty_sessions
+            WHERE status = 'ON_DUTY'
+            ORDER BY UPPER(device_id), guard_id, checked_in_at DESC
+          ) AND status = 'ON_DUTY';
+        `);
+      } catch (cleanupErr) {
+        console.warn('[AutoMigration Notice] Duty session deduplication notice:', cleanupErr.message);
+      }
+
       // Ensure at least one sample active duty session exists for DEV-NORTH-01
-      const checkDuty = await db.query(`SELECT id FROM device_duty_sessions WHERE device_id = 'DEV-NORTH-01' AND status = 'ON_DUTY'`);
+      const checkDuty = await db.query(`SELECT id FROM device_duty_sessions WHERE UPPER(device_id) = 'DEV-NORTH-01' AND status = 'ON_DUTY'`);
       if (checkDuty.rows.length === 0) {
         const ramesh = await db.query(`SELECT id, name, phone, guid FROM users WHERE email = 'guard1@ashram.org' LIMIT 1`);
         if (ramesh.rows.length > 0) {
