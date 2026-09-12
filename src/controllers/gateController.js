@@ -3,48 +3,69 @@ const { broadcastSyncEvent } = require('../sockets/syncServer');
 const { logSystemAction } = require('../services/auditLogger');
 const { checkSystematicCheckouts } = require('./expiryService');
 
-function computeVisitorStatuses(reg) {
-  const now = new Date();
+function computeVisitorStatuses(reg, customNow) {
+  const now = customNow || new Date();
   const validFrom = reg.valid_from ? new Date(reg.valid_from) : new Date();
-  const validUntil = new Date(reg.valid_until);
+  const validUntil = reg.valid_until ? new Date(reg.valid_until) : new Date(validFrom.getTime() + 12 * 3600 * 1000);
   const departureTimePassed = now > validUntil;
 
-  // Arrival window: 8 hours prior to arrival
-  const eightHoursPrior = new Date(validFrom.getTime() - 8 * 60 * 60 * 1000);
-  const isWithinArrivalWindow = now >= eightHoursPrior;
+  // Point 5 & 6: Earliest arrival window is max(5:00 AM of ETA date, ETA - 8 hours), not exceeding ETD
+  const validFromDate = new Date(validFrom);
+  const day5AM = new Date(validFromDate.getFullYear(), validFromDate.getMonth(), validFromDate.getDate(), 5, 0, 0, 0);
+  const raw8HoursPrior = new Date(validFrom.getTime() - 8 * 60 * 60 * 1000);
+  const windowStart = raw8HoursPrior < day5AM ? day5AM : raw8HoursPrior;
+  const isWithinArrivalWindow = now >= windowStart;
+  const arrivalStatus = !isWithinArrivalWindow ? 'TOO_EARLY' : departureTimePassed ? 'ARRIVAL_EXPIRED' : 'ACTIVE_WINDOW';
+
+  // Track if visitor has entered campus at least once
+  const hasEnteredOnce = !!(reg.first_entry_at || reg.status === 'INSIDE_CAMPUS' || reg.status === 'CHECKED_OUT' || reg.lifecycle_status === 'CHECKED-IN' || reg.lifecycle_status === 'CHECKED-OUT');
+  const isCurrentlyInsideDB = reg.status === 'INSIDE_CAMPUS' || reg.presence_status === 'currently_inside';
 
   // Category 1: Lifecycle Status (Yet to Arrive, CHECKED-IN, CHECKED-OUT)
-  let lifecycleStatus = 'Yet to Arrive';
-  if (reg.lifecycle_status) {
-    lifecycleStatus = reg.lifecycle_status;
-  } else if (reg.status === 'CHECKED_OUT') {
-    lifecycleStatus = 'CHECKED-OUT';
-  } else if (reg.status === 'INSIDE_CAMPUS' || reg.first_entry_at) {
-    lifecycleStatus = 'CHECKED-IN';
-  } else if (['APPROVED', 'PENDING_L1', 'PENDING_L2'].includes(reg.status)) {
-    lifecycleStatus = 'Yet to Arrive';
-  }
-
   // Category 2: Physical Presence Status (currently_inside, currently_outside, over_stayed)
+  let lifecycleStatus = 'Yet to Arrive';
   let presenceStatus = 'currently_outside';
-  if (reg.status === 'INSIDE_CAMPUS' || reg.presence_status === 'currently_inside' || reg.presence_status === 'over_stayed') {
-    if (departureTimePassed) {
-      presenceStatus = 'over_stayed';
-    } else {
-      presenceStatus = 'currently_inside';
-    }
-  } else {
+
+  if (!hasEnteredOnce) {
+    // Point 7: Before first gate entry, status is 'Yet to Arrive' & 'currently_outside'
+    lifecycleStatus = 'Yet to Arrive';
     presenceStatus = 'currently_outside';
+  } else {
+    // Has entered campus at least once
+    if (isCurrentlyInsideDB) {
+      if (departureTimePassed) {
+        // Point 12: Staying inside past ETD -> CHECKED-IN and over_stayed
+        lifecycleStatus = 'CHECKED-IN';
+        presenceStatus = 'over_stayed';
+      } else {
+        // Point 8 & 10: Inside campus within ETD -> CHECKED-IN and currently_inside
+        lifecycleStatus = 'CHECKED-IN';
+        presenceStatus = 'currently_inside';
+      }
+    } else {
+      // Currently outside campus (either exited temporarily or checked-out)
+      if (departureTimePassed || reg.status === 'CHECKED_OUT' || reg.lifecycle_status === 'CHECKED-OUT') {
+        // Point 11: Left and did not return by ETD -> CHECKED-OUT and currently_outside
+        lifecycleStatus = 'CHECKED-OUT';
+        presenceStatus = 'currently_outside';
+      } else {
+        // Point 9: Gone out within ETD -> CHECKED-IN and currently_outside
+        lifecycleStatus = 'CHECKED-IN';
+        presenceStatus = 'currently_outside';
+      }
+    }
   }
 
-  // Systematic checkout rule: If currently_outside and estimated departure time has passed while checked-in
-  if (presenceStatus === 'currently_outside' && departureTimePassed && lifecycleStatus === 'CHECKED-IN') {
-    lifecycleStatus = 'CHECKED-OUT';
-  }
+  // Button Enablement Validations (Point 4, 8, 9, 10, 11, 12):
+  // IN button:
+  // - Enabled if within arrival window AND before ETD (!departureTimePassed)
+  // - AND presence is currently_outside (either Yet to Arrive or re-entry within ETD)
+  // - AND not already CHECKED-OUT
+  const isInEnabled = isWithinArrivalWindow && !departureTimePassed && presenceStatus === 'currently_outside' && lifecycleStatus !== 'CHECKED-OUT';
 
-  // IN button rule: enabled only if within 8 hours prior arrival AND till Visitor's estimated departure time AND not currently inside
-  const isInEnabled = isWithinArrivalWindow && !departureTimePassed && presenceStatus !== 'currently_inside';
-  // OUT button rule: enabled if Visitor's status is 'currently_inside' or 'over_stayed'
+  // OUT button:
+  // - Enabled if Visitor's status is 'currently_inside' (within ETD) or 'over_stayed' (past ETD)
+  // - Disabled once CHECKED-OUT or when currently_outside
   const isOutEnabled = presenceStatus === 'currently_inside' || presenceStatus === 'over_stayed';
 
   return {
@@ -52,6 +73,8 @@ function computeVisitorStatuses(reg) {
     presence_status: presenceStatus,
     departure_time_passed: departureTimePassed,
     is_within_arrival_window: isWithinArrivalWindow,
+    earliest_allowed_entry: windowStart.toISOString(),
+    arrival_status: arrivalStatus,
     is_in_enabled: isInEnabled,
     is_out_enabled: isOutEnabled,
   };
@@ -193,9 +216,20 @@ async function verifyGatePass(req, res) {
       const computedStatuses = computeVisitorStatuses(reg);
       const maskedHostPhone = reg.host_phone ? reg.host_phone.replace(/(\+\d{2}\s?\d{2})\d{4}(\d{4})/, '$1****$2') : '';
 
+      // Point 1 & 2: Mask visitor phone and hide Aadhaar for guards & gate terminals
+      const isGuard = !req.user || req.user.role !== 'ADMIN';
+      const rawVisPhone = String(reg.visitor_phone || '').trim();
+      const last4 = rawVisPhone.replace(/\D/g, '').slice(-4) || '****';
+      const maskedVisPhone = `******${last4}`;
+
       return {
         ...reg,
         ...computedStatuses,
+        visitor_phone: isGuard ? maskedVisPhone : reg.visitor_phone,
+        visitor_phone_masked: maskedVisPhone,
+        id_number: isGuard ? null : reg.id_number,
+        id_card_number: isGuard ? null : reg.id_card_number,
+        id_card_image_url: isGuard ? null : reg.id_card_image_url,
         host_phone_masked: maskedHostPhone,
         vehicle_details: reg.vehicle_no || reg.registered_plate_number || reg.visitor_vehicle_no || 'None',
         allowed_gates: allGates,
@@ -214,9 +248,9 @@ async function verifyGatePass(req, res) {
 
     const primaryPass = matches[0];
 
-    // Fetch multiple vehicles & logs for primary pass
+    // Fetch multiple vehicles & logs for primary pass (Point 3: up to 5 vehicles)
     try {
-      const vehRes = await db.query(`SELECT * FROM registration_vehicles WHERE registration_id = $1`, [primaryPass.id]);
+      const vehRes = await db.query(`SELECT * FROM registration_vehicles WHERE registration_id = $1 LIMIT 5`, [primaryPass.id]);
       primaryPass.vehicles = vehRes.rows;
       const logsRes = await db.query(
         `SELECT gl.*, u.name as guard_name, u.role as guard_role
@@ -307,7 +341,10 @@ async function processGateMovement(req, res) {
     const now = new Date();
     const validFrom = new Date(reg.valid_from);
     const validUntil = new Date(reg.valid_until);
-    const windowStart = new Date(validFrom.getTime() - graceHours * 60 * 60 * 1000);
+    const validFromDate = new Date(validFrom);
+    const day5AM = new Date(validFromDate.getFullYear(), validFromDate.getMonth(), validFromDate.getDate(), 5, 0, 0, 0);
+    const rawWindowStart = new Date(validFrom.getTime() - graceHours * 60 * 60 * 1000);
+    const windowStart = rawWindowStart < day5AM ? day5AM : rawWindowStart;
     const windowEnd = new Date(validUntil.getTime() + graceHours * 60 * 60 * 1000);
 
     if (direction === 'IN') {
@@ -365,7 +402,7 @@ async function processGateMovement(req, res) {
     const logRes = await db.query(
       `INSERT INTO gate_logs (id, guid, registration_id, visitor_id, gate_name, direction, person_count, adult_men_count, adult_women_count, children_count, boys_count, girls_count, vehicle_no, recorded_by_guard_id, remarks)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *`,
-      [nextLogId, gateLogGuid, registration_id, reg.visitor_id, gate_name, direction, totalCount, menCount, womenCount, kidsCount, boysCount, girlsCount, vehicle_no || '', req.user.id, remarks || '']
+      [nextLogId, gateLogGuid, registration_id, reg.visitor_id, gate_name, direction, totalCount, menCount, womenCount, kidsCount, boysCount, girlsCount, vehicle_no || '', req.user?.id || 1, remarks || '']
     );
 
     // Rule 5, 9, 10:
@@ -454,6 +491,16 @@ async function processGateMovement(req, res) {
       timestamp: new Date(),
     });
 
+    const computed = computeVisitorStatuses({
+      ...reg,
+      status: newStatus,
+      lifecycle_status: newLifecycle,
+      presence_status: newPresence,
+      first_entry_at: firstEntryAt,
+      last_entry_at: lastEntryAt,
+      last_exit_at: lastExitAt
+    }, now);
+
     res.json({
       success: true,
       message: direction === 'IN' 
@@ -462,6 +509,8 @@ async function processGateMovement(req, res) {
       status: newStatus,
       lifecycle_status: newLifecycle,
       presence_status: newPresence,
+      is_in_enabled: computed.is_in_enabled,
+      is_out_enabled: computed.is_out_enabled,
       gate_log: logRes.rows[0],
     });
   } catch (err) {
@@ -675,21 +724,25 @@ async function getInvitedVisitors(req, res) {
     let queryParams = [];
     let whereClauses = [];
 
-    // Filter 1: Valid time window (+8 hours upcoming) OR already checked-in visitors
-    // Upcoming: valid_from <= (NOW() + INTERVAL '8 hours') AND valid_until >= (NOW() - INTERVAL '2 hours')
-    // Checked-in: lifecycle_status = 'CHECKED-IN' OR status = 'INSIDE_CAMPUS' OR presence_status = 'currently_inside' OR first_entry_at IS NOT NULL
+    // Filter 1: Valid time window (+8 hours upcoming, but not before 5 AM of arrival date) OR already checked-in visitors
+    // Point 6 & 7: Once ETA-8 hours comes (not preceding 5 AM), show in list with 'Yet to Arrive'
     whereClauses.push(`(
       (
         r.status IN ('APPROVED', 'INSIDE_CAMPUS')
         AND r.pass_code IS NOT NULL
         AND r.registration_type NOT IN ('DELIVERY_COURIER')
         AND COALESCE(v.visitor_category, '') NOT IN ('MAID', 'DELIVERY')
-        AND r.valid_from <= (CURRENT_TIMESTAMP + INTERVAL '8 hours')
-        AND r.valid_until >= (CURRENT_TIMESTAMP - INTERVAL '2 hours')
+        AND CURRENT_TIMESTAMP >= GREATEST(r.valid_from - INTERVAL '8 hours', DATE_TRUNC('day', r.valid_from) + INTERVAL '5 hours')
+        AND (
+          r.valid_until >= (CURRENT_TIMESTAMP - INTERVAL '1 hour')
+          OR r.status = 'INSIDE_CAMPUS'
+          OR r.presence_status IN ('currently_inside', 'over_stayed')
+        )
       )
       OR (
         r.status = 'INSIDE_CAMPUS'
         OR r.presence_status = 'currently_inside'
+        OR r.presence_status = 'over_stayed'
         OR ((r.lifecycle_status = 'CHECKED-IN' OR r.first_entry_at IS NOT NULL) AND r.valid_until >= (CURRENT_TIMESTAMP - INTERVAL '4 hours'))
       )
     )`);
@@ -753,14 +806,63 @@ async function getInvitedVisitors(req, res) {
       return true;
     });
 
+    // Fetch multiple vehicles (Point 3: up to 5) for all registrations
+    const regIds = uniqueRows.map(r => r.id);
+    let vehiclesByReg = {};
+    if (regIds.length > 0) {
+      try {
+        const vRes = await db.query(
+          `SELECT registration_id, plate_number, vehicle_type, driver_name, driver_phone 
+           FROM registration_vehicles 
+           WHERE registration_id = ANY($1::int[]) 
+           LIMIT 500`,
+          [regIds]
+        );
+        for (const v of vRes.rows) {
+          if (!vehiclesByReg[v.registration_id]) vehiclesByReg[v.registration_id] = [];
+          if (vehiclesByReg[v.registration_id].length < 5) {
+            vehiclesByReg[v.registration_id].push(v);
+          }
+        }
+      } catch (ve) {}
+    }
+
     const visitors = uniqueRows.map((row) => {
       const computed = computeVisitorStatuses(row);
       const maskedHostPhone = row.host_phone ? row.host_phone.replace(/(\+\d{2}\s?\d{2})\d{4}(\d{4})/, '$1****$2') : '';
+
+      // Point 1: Mask visitor's phone number all but last 4 digits (e.g. ******1234)
+      const rawVisitorPhone = String(row.visitor_phone || '').trim();
+      const cleanDigits = rawVisitorPhone.replace(/\D/g, '');
+      const last4Digits = cleanDigits.slice(-4) || '****';
+      const maskedVisitorPhone = `******${last4Digits}`;
+
+      // Point 3: Up to 5 vehicles with plate number and vehicle type
+      const regVehicles = vehiclesByReg[row.id] || [];
+      if (regVehicles.length === 0 && (row.registered_plate_number || row.vehicle_no || row.visitor_vehicle_no)) {
+        regVehicles.push({
+          plate_number: row.registered_plate_number || row.vehicle_no || row.visitor_vehicle_no,
+          vehicle_type: row.registered_vehicle_type || row.vehicle_type || 'Car'
+        });
+      }
+      const vehicleDetailsStr = regVehicles.length > 0
+        ? regVehicles.map(v => `${v.plate_number}${v.vehicle_type ? ` (${v.vehicle_type})` : ''}`).join(', ')
+        : (row.vehicle_no || row.registered_plate_number || row.visitor_vehicle_no || 'None');
+
       return {
         ...row,
         ...computed,
+        // Point 1: Masked phone for guards
+        visitor_phone: maskedVisitorPhone,
+        visitor_phone_masked: maskedVisitorPhone,
         host_phone_masked: maskedHostPhone,
-        vehicle_details: row.vehicle_no || row.registered_plate_number || row.visitor_vehicle_no || 'None',
+        // Point 2: Aadhaar visibility to Guards is NOT required
+        id_number: null,
+        id_card_number: null,
+        id_card_image_url: null,
+        // Point 3: Up to 5 vehicles
+        vehicles: regVehicles,
+        vehicle_details: vehicleDetailsStr,
       };
     });
 
@@ -814,7 +916,24 @@ async function updateVisitorGateDetails(req, res) {
       [men, women, kids, boys, girls, total, newVehicleNo, id]
     );
 
-    if (newVehicleNo !== undefined) {
+    if (Array.isArray(req.body.vehicles)) {
+      await db.query('DELETE FROM registration_vehicles WHERE registration_id = $1', [id]);
+      const validVehs = req.body.vehicles.slice(0, 5).filter(v => v.plate_number && String(v.plate_number).trim() !== '');
+      for (const veh of validVehs) {
+        const maxRv = await db.query('SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM registration_vehicles');
+        const nextRvId = parseInt(maxRv.rows[0].next_id, 10);
+        await db.query(
+          `INSERT INTO registration_vehicles (id, registration_id, plate_number, vehicle_type, driver_name, driver_phone)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [nextRvId, id, veh.plate_number.trim(), veh.vehicle_type || 'Car', veh.driver_name || '', veh.driver_phone || '']
+        );
+      }
+      if (validVehs.length > 0) {
+        const firstPlate = validVehs[0].plate_number.trim();
+        await db.query('UPDATE registrations SET vehicle_no = $1 WHERE id = $2', [firstPlate, id]);
+        await db.query('UPDATE visitors SET vehicle_no = $1 WHERE id = $2', [firstPlate, reg.visitor_id]);
+      }
+    } else if (newVehicleNo !== undefined) {
       await db.query(`UPDATE visitors SET vehicle_no = $1 WHERE id = $2`, [newVehicleNo, reg.visitor_id]);
       
       const rvCheck = await db.query(`SELECT id FROM registration_vehicles WHERE registration_id = $1 LIMIT 1`, [id]);
@@ -828,7 +947,7 @@ async function updateVisitorGateDetails(req, res) {
         const nextRvId = parseInt(maxRv.rows[0].next_id, 10);
         await db.query(
           `INSERT INTO registration_vehicles (id, registration_id, plate_number, vehicle_type) VALUES ($1, $2, $3, $4)`,
-          [nextRvId, id, newVehicleNo, vehicle_type || 'FOUR_WHEELER']
+          [nextRvId, id, newVehicleNo, vehicle_type || 'Car']
         );
       }
     }
@@ -882,4 +1001,5 @@ module.exports = {
   getGatewiseStatsAndSelfRegistered,
   getInvitedVisitors,
   updateVisitorGateDetails,
+  computeVisitorStatuses,
 };

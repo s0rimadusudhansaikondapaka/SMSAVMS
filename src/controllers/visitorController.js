@@ -77,6 +77,29 @@ async function createRegistration(req, res) {
       validUntilTime.setHours(21, 0, 0, 0); // Default to Tomorrow 9:00 PM
     }
 
+    if (!is_spot_registration) {
+      const fromHour = validFromTime.getHours();
+      const fromMin = validFromTime.getMinutes();
+      const untilHour = validUntilTime.getHours();
+      const untilMin = validUntilTime.getMinutes();
+
+      if (fromHour < 5 || fromHour > 22 || (fromHour === 22 && fromMin > 0)) {
+        await db.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Estimated Time of Arrival (ETA) must be between 5:00 AM and 10:00 PM.'
+        });
+      }
+
+      if (untilHour < 5 || untilHour > 22 || (untilHour === 22 && untilMin > 0)) {
+        await db.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Estimated Time of Departure (ETD) must be between 5:00 AM and 10:00 PM.'
+        });
+      }
+    }
+
     // Determine initial status based on approval matrix & L2 setting
     const l2Enabled = await isL2Enabled();
     // Enhanced approval routing with time-based L2 and approvers_config
@@ -324,18 +347,17 @@ function getHostInvitationPermissions(userType, userRole) {
       await db.query('UPDATE registrations SET host_notified_at = CURRENT_TIMESTAMP WHERE id = $1', [registration.id]);
     }
 
-    // Insert Multiple Registered Vehicles if provided
-    if (Array.isArray(vehicles) && vehicles.length > 0) {
-      for (const veh of vehicles) {
-        if (veh.plate_number) {
-          const maxVeh = await db.query('SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM registration_vehicles');
-          const nextVehId = parseInt(maxVeh.rows[0].next_id, 10);
-          await db.query(
-            `INSERT INTO registration_vehicles (id, registration_id, plate_number, vehicle_type, driver_name, driver_phone)
-             VALUES ($1, $2, $3, $4, $5, $6)`,
-            [nextVehId, registration.id, veh.plate_number, veh.vehicle_type || 'Car', veh.driver_name || '', veh.driver_phone || '']
-          );
-        }
+    // Insert Multiple Registered Vehicles if provided (up to 5)
+    const vehiclesList = (Array.isArray(vehicles) ? vehicles : []).slice(0, 5);
+    for (const veh of vehiclesList) {
+      if (veh.plate_number) {
+        const maxVeh = await db.query('SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM registration_vehicles');
+        const nextVehId = parseInt(maxVeh.rows[0].next_id, 10);
+        await db.query(
+          `INSERT INTO registration_vehicles (id, registration_id, plate_number, vehicle_type, driver_name, driver_phone)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [nextVehId, registration.id, veh.plate_number, veh.vehicle_type || 'Car', veh.driver_name || '', veh.driver_phone || '']
+        );
       }
     }
 
@@ -1035,9 +1057,32 @@ async function createPublicVisitorRegistration(req, res) {
       validUntilTime.setHours(21, 0, 0, 0); // Default to Tomorrow 9:00 PM
     }
 
+    const fromHour = validFromTime.getHours();
+    const fromMin = validFromTime.getMinutes();
+    const untilHour = validUntilTime.getHours();
+    const untilMin = validUntilTime.getMinutes();
+
+    if (fromHour < 5 || fromHour > 22 || (fromHour === 22 && fromMin > 0)) {
+      await db.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Estimated Time of Arrival (ETA) must be between 5:00 AM and 10:00 PM.'
+      });
+    }
+
+    if (untilHour < 5 || untilHour > 22 || (untilHour === 22 && untilMin > 0)) {
+      await db.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Estimated Time of Departure (ETD) must be between 5:00 AM and 10:00 PM.'
+      });
+    }
+
     const menCount = parseInt(adult_men_count) || 1;
     const womenCount = parseInt(adult_women_count) || 0;
-    const kidsCount = parseInt(children_count) || 0;
+    const boys = parseInt(req.body.boys_count) || 0;
+    const girls = parseInt(req.body.girls_count) || 0;
+    const kidsCount = parseInt(children_count) || (boys + girls);
     const totalCount = menCount + womenCount + kidsCount;
 
     const maxR = await db.query('SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM registrations');
@@ -1045,26 +1090,25 @@ async function createPublicVisitorRegistration(req, res) {
 
     const regRes = await db.query(
       `INSERT INTO registrations 
-       (id, visitor_id, host_id, purpose, registration_mode, registration_type, visit_type, priority, status, pass_code, valid_from, valid_until, adult_men_count, adult_women_count, children_count, person_count, host_notified_at)
-       VALUES ($1, $2, $3, $4, $5, 'PRE_APPROVAL', 'HOME', 'P3', 'PENDING_L1', $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
+       (id, visitor_id, host_id, purpose, registration_mode, registration_type, visit_type, priority, status, pass_code, valid_from, valid_until, adult_men_count, adult_women_count, children_count, person_count, host_notified_at, lifecycle_status, presence_status, boys_count, girls_count)
+       VALUES ($1, $2, $3, $4, $5, 'PRE_APPROVAL', 'HOME', 'P3', 'PENDING_L1', $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP, 'Yet to Arrive', 'currently_outside', $13, $14)
        RETURNING *`,
-      [nextRegId, visitorId, hostNumericId, purpose || 'Visitor Self-Filled Form via Share Link', registration_mode || 'Single', passCode, validFromTime, validUntilTime, menCount, womenCount, kidsCount, totalCount]
+      [nextRegId, visitorId, hostNumericId, purpose || 'Visitor Self-Filled Form via Share Link', registration_mode || 'Single', passCode, validFromTime, validUntilTime, menCount, womenCount, kidsCount, totalCount, boys, girls]
     );
 
     const registration = regRes.rows[0];
 
-    // Insert Multiple Registered Vehicles if provided
-    if (Array.isArray(vehicles) && vehicles.length > 0) {
-      for (const veh of vehicles) {
-        if (veh.plate_number) {
-          const maxVeh = await db.query('SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM registration_vehicles');
-          const nextVehId = parseInt(maxVeh.rows[0].next_id, 10);
-          await db.query(
-            `INSERT INTO registration_vehicles (id, registration_id, plate_number, vehicle_type, driver_name, driver_phone)
-             VALUES ($1, $2, $3, $4, $5, $6)`,
-            [nextVehId, registration.id, veh.plate_number, veh.vehicle_type || 'Car', veh.driver_name || '', veh.driver_phone || '']
-          );
-        }
+    // Insert Multiple Registered Vehicles if provided (up to 5)
+    const vehiclesList = (Array.isArray(vehicles) ? vehicles : []).slice(0, 5);
+    for (const veh of vehiclesList) {
+      if (veh.plate_number) {
+        const maxVeh = await db.query('SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM registration_vehicles');
+        const nextVehId = parseInt(maxVeh.rows[0].next_id, 10);
+        await db.query(
+          `INSERT INTO registration_vehicles (id, registration_id, plate_number, vehicle_type, driver_name, driver_phone)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [nextVehId, registration.id, veh.plate_number, veh.vehicle_type || 'Car', veh.driver_name || '', veh.driver_phone || '']
+        );
       }
     }
 
@@ -1116,6 +1160,8 @@ async function createPublicVisitorRegistration(req, res) {
       success: true,
       message: 'Visitor information submitted successfully! Awaiting host approval.',
       pass_code: passCode,
+      registration_id: registration.id,
+      registration,
     });
   } catch (err) {
     await db.query('ROLLBACK');
