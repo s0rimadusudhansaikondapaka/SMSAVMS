@@ -353,10 +353,11 @@ function getHostInvitationPermissions(userType, userRole) {
       if (veh.plate_number) {
         const maxVeh = await db.query('SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM registration_vehicles');
         const nextVehId = parseInt(maxVeh.rows[0].next_id, 10);
+        const vType = (veh.vehicle_type && veh.vehicle_type !== 'Select') ? veh.vehicle_type : 'Two-Wheeler';
         await db.query(
           `INSERT INTO registration_vehicles (id, registration_id, plate_number, vehicle_type, driver_name, driver_phone)
            VALUES ($1, $2, $3, $4, $5, $6)`,
-          [nextVehId, registration.id, veh.plate_number, veh.vehicle_type || 'Car', veh.driver_name || '', veh.driver_phone || '']
+          [nextVehId, registration.id, veh.plate_number, vType, veh.driver_name || '', veh.driver_phone || '']
         );
       }
     }
@@ -1113,10 +1114,11 @@ async function createPublicVisitorRegistration(req, res) {
       if (veh.plate_number) {
         const maxVeh = await db.query('SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM registration_vehicles');
         const nextVehId = parseInt(maxVeh.rows[0].next_id, 10);
+        const vType = (veh.vehicle_type && veh.vehicle_type !== 'Select') ? veh.vehicle_type : 'Two-Wheeler';
         await db.query(
           `INSERT INTO registration_vehicles (id, registration_id, plate_number, vehicle_type, driver_name, driver_phone)
            VALUES ($1, $2, $3, $4, $5, $6)`,
-          [nextVehId, registration.id, veh.plate_number, veh.vehicle_type || 'Car', veh.driver_name || '', veh.driver_phone || '']
+          [nextVehId, registration.id, veh.plate_number, vType, veh.driver_name || '', veh.driver_phone || '']
         );
       }
     }
