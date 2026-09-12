@@ -34,51 +34,58 @@ const realPool = new Pool({
   connectionTimeoutMillis: 3000,
 });
 
+let initPromise = null;
+
 async function initDb() {
   if (pool) return pool;
+  if (initPromise) return initPromise;
 
-  try {
-    const res = await realPool.query('SELECT 1');
-    console.log(`[PostgreSQL DB] Successfully connected to PostgreSQL database in '${activeEnv.toUpperCase()}' environment.`);
-    pool = realPool;
+  initPromise = (async () => {
     try {
-      const runAutoMigrations = require('../db/autoMigrate');
-      await runAutoMigrations();
-    } catch (mErr) {
-      console.error('[PostgreSQL DB Error] Error executing auto-migrations on real DB:', mErr.message || mErr);
-    }
-  } catch (err) {
-    console.log(`[PostgreSQL DB Notice] Remote/Native PostgreSQL connection error (${err.message}). Initializing embedded PostgreSQL engine for database '${process.env.DB_NAME || 'vm'}'...`);
-    isMemoryMode = true;
-    const memDb = newDb();
-    const adapter = memDb.adapters.createPg();
-    pool = new adapter.Pool();
-
-    // Auto-seed schema & sample data
-    const fs = require('fs');
-    const path = require('path');
-    try {
-      const schemaSql = fs.readFileSync(path.join(__dirname, '..', 'db', 'schema.sql'), 'utf8');
-      const seedSql = fs.readFileSync(path.join(__dirname, '..', 'db', 'seed.sql'), 'utf8');
-      await pool.query(schemaSql);
+      const res = await realPool.query('SELECT 1');
+      console.log(`[PostgreSQL DB] Successfully connected to PostgreSQL database in '${activeEnv.toUpperCase()}' environment.`);
+      pool = realPool;
       try {
-        await pool.query(seedSql);
-      } catch (s2Err) {
-        // Ignore duplicate seed row insertions on embedded DB
+        const runAutoMigrations = require('../db/autoMigrate');
+        await runAutoMigrations();
+      } catch (mErr) {
+        console.error('[PostgreSQL DB Error] Error executing auto-migrations on real DB:', mErr.message || mErr);
       }
-      console.log(`[PostgreSQL DB] Embedded PostgreSQL engine initialized with schema and sample data for database '${process.env.DB_NAME || 'vm'}'.`);
-    } catch (sErr) {
-      console.error('[PostgreSQL DB Error] Error seeding embedded PostgreSQL engine:', sErr.message || sErr);
+    } catch (err) {
+      console.log(`[PostgreSQL DB Notice] Remote/Native PostgreSQL connection error (${err.message}). Initializing embedded PostgreSQL engine for database '${process.env.DB_NAME || 'vm'}'...`);
+      isMemoryMode = true;
+      const memDb = newDb();
+      const adapter = memDb.adapters.createPg();
+      pool = new adapter.Pool();
+
+      // Auto-seed schema & sample data
+      const fs = require('fs');
+      const path = require('path');
+      try {
+        const schemaSql = fs.readFileSync(path.join(__dirname, '..', 'db', 'schema.sql'), 'utf8');
+        const seedSql = fs.readFileSync(path.join(__dirname, '..', 'db', 'seed.sql'), 'utf8');
+        await pool.query(schemaSql);
+        try {
+          await pool.query(seedSql);
+        } catch (s2Err) {
+          // Ignore duplicate seed row insertions on embedded DB
+        }
+        console.log(`[PostgreSQL DB] Embedded PostgreSQL engine initialized with schema and sample data for database '${process.env.DB_NAME || 'vm'}'.`);
+      } catch (sErr) {
+        console.error('[PostgreSQL DB Error] Error seeding embedded PostgreSQL engine:', sErr.message || sErr);
+      }
+      // Trigger safe idempotent auto-migrations
+      try {
+        const runAutoMigrations = require('../db/autoMigrate');
+        await runAutoMigrations();
+      } catch (mErr) {
+        console.error('[PostgreSQL DB Error] Error executing auto-migrations:', mErr);
+      }
     }
-    // Trigger safe idempotent auto-migrations
-    try {
-      const runAutoMigrations = require('../db/autoMigrate');
-      await runAutoMigrations();
-    } catch (mErr) {
-      console.error('[PostgreSQL DB Error] Error executing auto-migrations:', mErr);
-    }
-  }
-  return pool;
+    return pool;
+  })();
+
+  return initPromise;
 }
 
 // Initialize immediately

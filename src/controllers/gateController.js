@@ -9,26 +9,36 @@ function computeVisitorStatuses(reg, customNow) {
   const validUntil = reg.valid_until ? new Date(reg.valid_until) : new Date(validFrom.getTime() + 12 * 3600 * 1000);
   const departureTimePassed = now > validUntil;
 
+  // Approval check: Pass must be approved, permanent, VVIP, or bypassed
+  const isPerm = isPermanentPass(reg);
+  const isApproved = isPerm || !!reg.is_vvip || !!reg.bypassed_by_admin || reg.status === 'APPROVED' || reg.status === 'INSIDE_CAMPUS' || reg.status === 'CHECKED_OUT';
+  const isPending = String(reg.status || '').startsWith('PENDING');
+  const isRejected = reg.status === 'REJECTED';
+
   // Point 5 & 6: Earliest arrival window is max(5:00 AM of ETA date, ETA - 8 hours), not exceeding ETD
   const validFromDate = new Date(validFrom);
   const day5AM = new Date(validFromDate.getFullYear(), validFromDate.getMonth(), validFromDate.getDate(), 5, 0, 0, 0);
   const raw8HoursPrior = new Date(validFrom.getTime() - 8 * 60 * 60 * 1000);
   const windowStart = raw8HoursPrior < day5AM ? day5AM : raw8HoursPrior;
   const isWithinArrivalWindow = now >= windowStart;
-  const arrivalStatus = !isWithinArrivalWindow ? 'TOO_EARLY' : departureTimePassed ? 'ARRIVAL_EXPIRED' : 'ACTIVE_WINDOW';
+  const arrivalStatus = !isApproved ? 'NOT_APPROVED' : !isWithinArrivalWindow ? 'TOO_EARLY' : departureTimePassed ? 'ARRIVAL_EXPIRED' : 'ACTIVE_WINDOW';
 
   // Track if visitor has entered campus at least once
   const hasEnteredOnce = !!(reg.first_entry_at || reg.status === 'INSIDE_CAMPUS' || reg.status === 'CHECKED_OUT' || reg.lifecycle_status === 'CHECKED-IN' || reg.lifecycle_status === 'CHECKED-OUT');
   const isCurrentlyInsideDB = reg.status === 'INSIDE_CAMPUS' || reg.presence_status === 'currently_inside';
 
-  // Category 1: Lifecycle Status (Yet to Arrive, CHECKED-IN, CHECKED-OUT)
+  // Category 1: Lifecycle Status (Yet to Arrive, CHECKED-IN, CHECKED-OUT, Not Yet Approved)
   // Category 2: Physical Presence Status (currently_inside, currently_outside, over_stayed)
   let lifecycleStatus = 'Yet to Arrive';
   let presenceStatus = 'currently_outside';
 
   if (!hasEnteredOnce) {
-    // Point 7: Before first gate entry, status is 'Yet to Arrive' & 'currently_outside'
-    lifecycleStatus = 'Yet to Arrive';
+    // Before first gate entry
+    if (!isApproved) {
+      lifecycleStatus = isRejected ? 'REJECTED' : 'Not Yet Approved';
+    } else {
+      lifecycleStatus = 'Yet to Arrive';
+    }
     presenceStatus = 'currently_outside';
   } else {
     // Has entered campus at least once
@@ -58,17 +68,26 @@ function computeVisitorStatuses(reg, customNow) {
 
   // Button Enablement Validations (Point 4, 8, 9, 10, 11, 12):
   // IN button:
+  // - MUST be approved
   // - Enabled if within arrival window AND before ETD (!departureTimePassed)
   // - AND presence is currently_outside (either Yet to Arrive or re-entry within ETD)
   // - AND not already CHECKED-OUT
-  const isInEnabled = isWithinArrivalWindow && !departureTimePassed && presenceStatus === 'currently_outside' && lifecycleStatus !== 'CHECKED-OUT';
+  const isInEnabled = isApproved && isWithinArrivalWindow && !departureTimePassed && presenceStatus === 'currently_outside' && lifecycleStatus !== 'CHECKED-OUT';
 
   // OUT button:
   // - Enabled if Visitor's status is 'currently_inside' (within ETD) or 'over_stayed' (past ETD)
   // - Disabled once CHECKED-OUT or when currently_outside
   const isOutEnabled = presenceStatus === 'currently_inside' || presenceStatus === 'over_stayed';
 
+  let approvalLabel = isApproved ? 'Approved' : isRejected ? 'Rejected' : 'Not Yet Approved';
+  if (reg.status === 'PENDING_L1') approvalLabel = 'Not Yet Approved (Awaiting Host Approval)';
+  if (reg.status === 'PENDING_L2') approvalLabel = 'Not Yet Approved (Awaiting L2 Approval)';
+  if (reg.status === 'PENDING_ACCOMMODATION') approvalLabel = 'Not Yet Approved (Awaiting Accommodation Approval)';
+
   return {
+    is_approved: isApproved,
+    approval_status: isApproved ? 'APPROVED' : (isRejected ? 'REJECTED' : 'NOT_APPROVED'),
+    approval_label: approvalLabel,
     lifecycle_status: lifecycleStatus,
     presence_status: presenceStatus,
     departure_time_passed: departureTimePassed,
@@ -193,12 +212,16 @@ async function verifyGatePass(req, res) {
       const windowStart = new Date(validFrom.getTime() - graceHours * 60 * 60 * 1000);
       const windowEnd = new Date(validUntil.getTime() + graceHours * 60 * 60 * 1000);
 
+      const isApproved = isPerm || !!reg.is_vvip || !!reg.bypassed_by_admin || reg.status === 'APPROVED' || reg.status === 'INSIDE_CAMPUS' || reg.status === 'CHECKED_OUT';
       let arrivalStatus = 'VALID_FOR_ENTRY';
       let arrivalMessage = isPerm
         ? 'Permanent Multi-Entry Passcard - Valid 24/7 for unlimited entry & exit'
         : `Pass valid for entry (Allowed from ${graceHours}h before arrival until ${graceHours}h after departure)`;
 
-      if (!isPerm) {
+      if (!isApproved) {
+        arrivalStatus = 'NOT_APPROVED';
+        arrivalMessage = `⛔ Entry Blocked: Visitor pass is not yet approved. Approval is pending (${reg.status === 'PENDING_L1' ? 'Awaiting Host Approval' : reg.status === 'PENDING_L2' ? 'Awaiting L2 Approval' : reg.status}).`;
+      } else if (!isPerm) {
         if (now < windowStart) {
           arrivalStatus = 'TOO_EARLY';
           arrivalMessage = `⛔ Pass Arrival Window Not Open. Earliest entry allowed: ${windowStart.toLocaleString()}`;
@@ -462,6 +485,26 @@ async function processGateMovement(req, res) {
 
     if (vehicle_no) {
       await db.query(`UPDATE visitors SET vehicle_no = $1 WHERE id = $2`, [vehicle_no, reg.visitor_id]);
+    }
+
+    if (Array.isArray(req.body.vehicles)) {
+      await db.query('DELETE FROM registration_vehicles WHERE registration_id = $1', [registration_id]);
+      const validVehs = req.body.vehicles.slice(0, 5).filter(v => v.plate_number && String(v.plate_number).trim() !== '');
+      for (const veh of validVehs) {
+        const maxRv = await db.query('SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM registration_vehicles');
+        const nextRvId = parseInt(maxRv.rows[0].next_id, 10);
+        const vType = (veh.vehicle_type && veh.vehicle_type !== 'Select') ? veh.vehicle_type : 'Two-Wheeler';
+        await db.query(
+          `INSERT INTO registration_vehicles (id, registration_id, plate_number, vehicle_type, driver_name, driver_phone)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [nextRvId, registration_id, veh.plate_number.trim(), vType, veh.driver_name || '', veh.driver_phone || '']
+        );
+      }
+      if (validVehs.length > 0) {
+        const firstPlate = validVehs[0].plate_number.trim();
+        await db.query('UPDATE registrations SET vehicle_no = $1 WHERE id = $2', [firstPlate, registration_id]);
+        await db.query('UPDATE visitors SET vehicle_no = $1 WHERE id = $2', [firstPlate, reg.visitor_id]);
+      }
     }
 
     await logSystemAction(req, {
@@ -922,10 +965,11 @@ async function updateVisitorGateDetails(req, res) {
       for (const veh of validVehs) {
         const maxRv = await db.query('SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM registration_vehicles');
         const nextRvId = parseInt(maxRv.rows[0].next_id, 10);
+        const vType = (veh.vehicle_type && veh.vehicle_type !== 'Select') ? veh.vehicle_type : 'Two-Wheeler';
         await db.query(
           `INSERT INTO registration_vehicles (id, registration_id, plate_number, vehicle_type, driver_name, driver_phone)
            VALUES ($1, $2, $3, $4, $5, $6)`,
-          [nextRvId, id, veh.plate_number.trim(), veh.vehicle_type || 'Car', veh.driver_name || '', veh.driver_phone || '']
+          [nextRvId, id, veh.plate_number.trim(), vType, veh.driver_name || '', veh.driver_phone || '']
         );
       }
       if (validVehs.length > 0) {

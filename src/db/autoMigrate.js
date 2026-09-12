@@ -410,17 +410,22 @@ async function runAutoMigrations() {
 
       // Clean up any historical duplicate registrations with same pass_code, keeping only latest id
       try {
-        await db.query(`
-          DELETE FROM registrations
-          WHERE id NOT IN (
-            SELECT DISTINCT ON (pass_code) id
-            FROM registrations
-            WHERE pass_code IS NOT NULL
-            ORDER BY pass_code, id DESC
-          ) AND pass_code IS NOT NULL
-        `);
+        const allPassRegs = await db.query('SELECT id, pass_code FROM registrations WHERE pass_code IS NOT NULL ORDER BY id ASC');
+        const byCode = {};
+        for (const row of allPassRegs.rows) {
+          if (!byCode[row.pass_code]) byCode[row.pass_code] = [];
+          byCode[row.pass_code].push(row.id);
+        }
+        for (const [code, ids] of Object.entries(byCode)) {
+          if (ids.length > 1) {
+            const toDelete = ids.slice(0, ids.length - 1);
+            for (const delId of toDelete) {
+              await db.query('DELETE FROM registrations WHERE id = $1', [delId]);
+            }
+          }
+        }
       } catch (cleanDupErr) {
-        console.warn('[AutoMigration Notice] Could not run bulk duplicate pass cleanup:', cleanDupErr.message || cleanDupErr);
+        console.warn('[AutoMigration Notice] Could not run duplicate pass cleanup:', cleanDupErr.message || cleanDupErr);
       }
 
       const sampleVisitors = [

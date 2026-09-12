@@ -638,7 +638,16 @@ async function getHostRegistrations(req, res) {
       [req.user.id, req.user.role]
     );
 
-    const registrations = result.rows;
+    // Deduplicate by pass_code or id to ensure no double-rendering
+    const seenPassCodes = new Set();
+    const registrations = [];
+    for (const reg of result.rows) {
+      const key = reg.pass_code || `ID_${reg.id}`;
+      if (!seenPassCodes.has(key)) {
+        seenPassCodes.add(key);
+        registrations.push(reg);
+      }
+    }
 
     // Fetch multiple vehicles for each registration
     for (let reg of registrations) {
