@@ -35,7 +35,7 @@ async function runAutoMigrations() {
     const tablesWithSeq = [
       'users', 'visitors', 'registrations', 'gate_logs', 'audit_logs',
       'departments', 'gate_category_rules', 'l2_approval_matrix_rules',
-      'registration_vehicles', 'resident_family_members', 'resident_absences', 'approvers_config'
+      'registration_vehicles', 'resident_family_members', 'resident_absences', 'approvers_config', 'invite_tokens'
     ];
 
     for (const t of tablesWithSeq) {
@@ -168,6 +168,21 @@ async function runAutoMigrations() {
           direction_mode VARCHAR(50),
           is_active BOOLEAN,
           updated_at TIMESTAMP
+        );
+      `);
+    } catch (e) {}
+
+    // 8b. Invite Tokens Table
+    try {
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS invite_tokens (
+          id SERIAL PRIMARY KEY,
+          token VARCHAR(100),
+          host_id INTEGER,
+          is_used BOOLEAN,
+          used_at TIMESTAMP,
+          registration_id INTEGER,
+          created_at TIMESTAMP
         );
       `);
     } catch (e) {}
