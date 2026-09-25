@@ -26,7 +26,7 @@ async function login(req, res) {
       `SELECT u.*, d.name as department_name 
        FROM users u 
        LEFT JOIN departments d ON u.department_id = d.id 
-       WHERE u.email = $1`,
+       WHERE u.email = $1 OR u.phone = $1`,
       [email]
     );
 

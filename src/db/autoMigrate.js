@@ -83,7 +83,9 @@ async function runAutoMigrations() {
       ADD COLUMN IF NOT EXISTS presence_status VARCHAR(50) DEFAULT 'currently_outside',
       ADD COLUMN IF NOT EXISTS first_entry_at TIMESTAMP,
       ADD COLUMN IF NOT EXISTS last_entry_at TIMESTAMP,
-      ADD COLUMN IF NOT EXISTS last_exit_at TIMESTAMP;
+      ADD COLUMN IF NOT EXISTS last_exit_at TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS host_approved_at TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS host_approved_by INTEGER;
     `);
 
     try {

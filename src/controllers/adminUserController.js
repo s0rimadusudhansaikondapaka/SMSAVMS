@@ -485,7 +485,7 @@ async function getAllPendingL2Approvals(req, res) {
        FROM registrations r
        JOIN visitors v ON r.visitor_id = v.id
        LEFT JOIN users u ON r.host_id = u.id
-       WHERE r.status = 'PENDING_L2' OR r.status = 'PENDING_L1'
+       WHERE r.status = 'PENDING_L2' OR r.status = 'PENDING_L1' OR r.status = 'PENDING_SUPERVISOR'
        ORDER BY r.created_at DESC`
     );
     res.json({ success: true, pending_approvals: result.rows });

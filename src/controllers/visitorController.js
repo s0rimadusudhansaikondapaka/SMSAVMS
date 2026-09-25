@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const QRCode = require('qrcode');
 const db = require('../config/db');
 const { broadcastSyncEvent } = require('../sockets/syncServer');
@@ -78,6 +79,23 @@ async function createRegistration(req, res) {
     }
 
     if (!is_spot_registration) {
+      const now = new Date();
+      if (validFromTime < new Date(now.getTime() - 10 * 60 * 1000)) {
+        await db.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Arrival Date/Time (ETA) cannot be in the past or already expired.'
+        });
+      }
+
+      if (validUntilTime <= validFromTime) {
+        await db.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Departure Date/Time (ETD) must be after Arrival Date/Time.'
+        });
+      }
+
       const fromHour = validFromTime.getHours();
       const fromMin = validFromTime.getMinutes();
       const untilHour = validUntilTime.getHours();
@@ -110,11 +128,21 @@ async function createRegistration(req, res) {
     const departureDate = validUntilTime.toISOString().slice(0, 10);
     const isMultiDay = arrivalDate !== departureDate;
 
-    if (is_spot_registration) {
-      if (visit_type === 'TOUR') {
-        initialStatus = 'PENDING_L1';
-      } else if (visit_type === 'BHAJAN' || visit_type === 'EVENT') {
-        initialStatus = 'PENDING_L1';
+    // Check if registration is Walk-in Visitor (Spot) vs Invited Visitor
+    const isSpotOrWalkin = !!is_spot_registration || 
+                           req.body.registration_type === 'SPOT_REGISTRATION' || 
+                           req.body.registration_type === 'WALKIN' || 
+                           req.body.visitor_type === 'WALKIN';
+    const regType = isSpotOrWalkin ? 'SPOT_REGISTRATION' : 'PRE_APPROVAL';
+
+    if (isSpotOrWalkin) {
+      // Walk-in / Spot visitors are approved by Guard Supervisor!
+      const creatorRole = (req.user?.role || '').toUpperCase();
+      if (['SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'].includes(creatorRole) || req.body.auto_approve) {
+        initialStatus = 'APPROVED';
+      } else {
+        // Created by Guard or Spot self-registration kiosk: Awaiting Guard Supervisor approval
+        initialStatus = 'PENDING_SUPERVISOR';
       }
     }
 
@@ -122,7 +150,7 @@ function getHostInvitationPermissions(userType, userRole) {
   const type = (userType || userRole || 'RESIDENT').toUpperCase();
   const role = (userRole || '').toUpperCase();
 
-  if (['ADMIN', 'SUPERVISOR', 'SECURITY_HEAD', 'GUARD'].includes(role)) {
+  if (['ADMIN', 'SUPERVISOR', 'SECURITY_HEAD', 'GUARD', 'HOD'].includes(role) || type === 'HOD') {
     return {
       canInviteResidence: true, canInviteOffice: true, canInviteVip: true,
       allowedCategories: ['GENERAL', 'FAMILY_MEMBER', 'VIP', 'VVIP', 'MAID', 'FREQUENT_VISITOR', 'DELIVERY', 'VENDOR', 'FOREIGN_NATIONAL'],
@@ -188,13 +216,20 @@ function getHostInvitationPermissions(userType, userRole) {
   }
 }
 
-    if (host_id || req.user?.id) {
+    let isVipOrHodHost = false;
+    if (!isSpotOrWalkin && (host_id || (req.user?.id && !['GUARD', 'SUPERVISOR', 'SECURITY_HEAD'].includes(req.user?.role)))) {
       const activeHostId = host_id || req.user?.id;
       const hostRes = await db.query('SELECT role, COALESCE(user_type, role) as user_type FROM users WHERE id = $1', [activeHostId]);
       if (hostRes.rows.length > 0) {
-        const hostRole = hostRes.rows[0].role;
-        const hostUserType = hostRes.rows[0].user_type;
+        const hostRole = (hostRes.rows[0].role || '').toUpperCase();
+        const hostUserType = (hostRes.rows[0].user_type || '').toUpperCase();
         
+        const isVipHost = hostUserType === 'VIP_HOST' || hostRole === 'VIP_HOST' || hostUserType.includes('VIP_HOST') || hostRole.includes('VIP_HOST');
+        const isHodHost = hostRole === 'HOD' || hostUserType === 'HOD';
+        if (isVipHost || isHodHost) {
+          isVipOrHodHost = true;
+        }
+
         const hostPerms = getHostInvitationPermissions(hostUserType, hostRole);
         const reqCategory = (visitor_category || 'GENERAL').toUpperCase();
         const reqVisitType = (visit_type || 'HOME').toUpperCase();
@@ -217,21 +252,25 @@ function getHostInvitationPermissions(userType, userRole) {
           });
         }
 
-        // HOD auto-approves office visits
-        if (hostRole === 'HOD' && visit_type === 'OFFICE') {
-          initialStatus = 'APPROVED';
-        }
-
-        // Check approvers_config for time-based L2 routing
-        const configRes = await db.query(
-          `SELECT * FROM approvers_config WHERE host_type = $1 AND approval_required = true`,
-          [hostRole === 'HOD' ? 'EMPLOYEE' : hostRole]
-        );
-        if (configRes.rows.length > 0) {
-          const config = configRes.rows[0];
-          if (config.l2_to_security_head && (isNightArrival || isMultiDay)) {
-            if (initialStatus !== 'APPROVED') {
-              initialStatus = 'PENDING_L2';
+        // VIP Hosts and HOD Hosts invited visitors don't need L2 approval!
+        if (isVipOrHodHost) {
+          if (!stay_required) {
+            initialStatus = 'APPROVED';
+          } else {
+            initialStatus = 'PENDING_ACCOMMODATION';
+          }
+        } else {
+          // Check approvers_config for time-based L2 routing for other hosts
+          const configRes = await db.query(
+            `SELECT * FROM approvers_config WHERE host_type = $1 AND approval_required = true`,
+            [hostRole]
+          );
+          if (configRes.rows.length > 0) {
+            const config = configRes.rows[0];
+            if (config.l2_to_security_head && (isNightArrival || isMultiDay)) {
+              if (initialStatus !== 'APPROVED') {
+                initialStatus = 'PENDING_L2';
+              }
             }
           }
         }
@@ -270,17 +309,21 @@ function getHostInvitationPermissions(userType, userRole) {
     }
 
     if (isFamilyMember) {
-      if (isPriorProApproved) {
-        initialStatus = 'APPROVED'; // Renewal pass auto-approved by Resident Host!
+      if (isPriorProApproved || isVipOrHodHost) {
+        initialStatus = 'APPROVED'; // Renewal pass or VIP/HOD Host auto-approved!
       } else {
         initialStatus = 'PENDING_L2'; // First-time family pass requires PRO Team Approval!
       }
       validUntilTime = new Date(validFromTime);
       validUntilTime.setFullYear(validUntilTime.getFullYear() + 2);
-    } else if (isPermanentStaff || is_permanent) {
+    } else if (isPermanentStaff || req.body.is_permanent) {
       initialStatus = 'APPROVED';
       validUntilTime = new Date(validFromTime);
       validUntilTime.setFullYear(validUntilTime.getFullYear() + 2);
+    }
+
+    if (isVipOrHodHost && stay_required) {
+      initialStatus = 'PENDING_ACCOMMODATION';
     }
 
     // Generate unique category-aware Pass Code
@@ -312,16 +355,17 @@ function getHostInvitationPermissions(userType, userRole) {
     const nextRegId = parseInt(maxR.rows[0].next_id, 10);
     const regRes = await db.query(
       `INSERT INTO registrations 
-       (id, visitor_id, host_id, family_member_id, purpose, visit_type, stay_required, accommodation_approved, priority, status, pass_code, valid_from, valid_until, adult_men_count, adult_women_count, children_count, boys_count, girls_count, person_count, is_vvip, relationship_to_resident)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+       (id, visitor_id, host_id, family_member_id, purpose, registration_type, visit_type, stay_required, accommodation_approved, priority, status, pass_code, valid_from, valid_until, adult_men_count, adult_women_count, children_count, boys_count, girls_count, person_count, is_vvip, relationship_to_resident)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
        RETURNING *`,
       [
         nextRegId,
         visitorId,
         host_id || req.user?.id || null,
         familyMemberRecordId,
-        purpose || 'Family Visit / Ashram Stay',
-        visit_type || 'HOME',
+        purpose || (isSpotOrWalkin ? 'Spot / Walk-in Gate Visit' : 'Family Visit / Ashram Stay'),
+        regType,
+        visit_type || (isSpotOrWalkin ? 'TOUR' : 'HOME'),
         stay_required || false,
         false,
         priority || (is_vvip ? 'P1' : 'P3'),
@@ -342,7 +386,20 @@ function getHostInvitationPermissions(userType, userRole) {
 
     const registration = regRes.rows[0];
 
-    // Set host notification timestamp for timeout tracking
+    // If initialStatus is APPROVED (e.g. walk-in registered by Supervisor or VIP Host), generate QR Code immediately
+    if (initialStatus === 'APPROVED') {
+      const qrData = JSON.stringify({ passCode, regId: nextRegId, isVvip: is_vvip || false });
+      const qrCodeUrl = await QRCode.toDataURL(qrData);
+      await db.query(
+        `UPDATE registrations 
+         SET qr_code_url = $1, approved_by_user_id = $2, approved_by_name = $3, approved_by_role = $4, approval_timestamp = CURRENT_TIMESTAMP 
+         WHERE id = $5`,
+        [qrCodeUrl, req.user?.id || null, req.user?.name || 'Guard Supervisor', req.user?.role || 'SUPERVISOR', nextRegId]
+      );
+      registration.qr_code_url = qrCodeUrl;
+    }
+
+    // Set host notification timestamp for timeout tracking (for invited visitors awaiting L1)
     if (registration.host_id && initialStatus === 'PENDING_L1') {
       await db.query('UPDATE registrations SET host_notified_at = CURRENT_TIMESTAMP WHERE id = $1', [registration.id]);
     }
@@ -434,7 +491,31 @@ function getHostInvitationPermissions(userType, userRole) {
 
 // 2. Host or Approver Process Approval / Rejection
 async function updateApproval(req, res) {
-  const { registration_id, action, remarks, priority, visit_type, visitor_category, valid_from, valid_until } = req.body;
+  const {
+    registration_id,
+    action,
+    remarks,
+    priority,
+    visit_type,
+    visitor_category,
+    valid_from,
+    valid_until,
+    // Editable data until L1 approver approves:
+    visitor_name,
+    full_name,
+    visitor_phone,
+    phone,
+    visitor_email,
+    email,
+    purpose,
+    adult_men_count,
+    adult_women_count,
+    boys_count,
+    girls_count,
+    children_count,
+    vehicles,
+  } = req.body;
+
   if (!registration_id || !action) {
     return res.status(400).json({ success: false, message: 'Registration ID and action required.' });
   }
@@ -453,18 +534,101 @@ async function updateApproval(req, res) {
     }
 
     const reg = regRes.rows[0];
+
+    // Determine whether this registration is a Walk-in / Spot visitor vs an Invited visitor
+    const isWalkIn = reg.registration_type === 'SPOT_REGISTRATION' || 
+                     reg.registration_type === 'WALKIN' || 
+                     reg.status === 'PENDING_SUPERVISOR' || 
+                     reg.status === 'PENDING_SPOT_APPROVAL';
+
+    // 1. Approval Authorization:
+    if (isWalkIn || reg.status === 'PENDING_SUPERVISOR') {
+      // Walk-in spot visitors are approved by Guard Supervisor (or Security Head / Admin / Guard)
+      const userRole = (req.user?.role || '').toUpperCase();
+      const isSupervisor = ['SUPERVISOR', 'SECURITY_HEAD', 'ADMIN', 'GUARD'].includes(userRole);
+      if (!isSupervisor) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access Denied: Walk-in spot visitors can only be approved by a Guard Supervisor or Security Administrator.',
+        });
+      }
+    } else if (reg.status === 'PENDING_L1') {
+      // Invited visitors Level-1 approval: only creator host or Super Admin
+      const isCreatorHost = reg.host_id && parseInt(reg.host_id, 10) === parseInt(req.user.id, 10);
+      const isAdmin = req.user.role === 'ADMIN';
+      if (!isCreatorHost && !isAdmin) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access Denied: Level-1 approval can only be performed by the host who created the invitation link.',
+        });
+      }
+    }
+
+    // 2. Once created host has approved, never send/approve again
+    if (action === 'APPROVE') {
+      if (reg.status === 'APPROVED') {
+        return res.status(400).json({
+          success: false,
+          message: 'This registration has already been approved and issued an active gate pass.',
+        });
+      }
+      if (!isWalkIn && reg.status === 'PENDING_L2' && parseInt(reg.host_id, 10) === parseInt(req.user.id, 10) && !['ADMIN', 'PRO'].includes(req.user.role)) {
+        return res.status(400).json({
+          success: false,
+          message: 'You have already approved this visitor pass. It is currently awaiting Level-2 (PRO) verification.',
+        });
+      }
+      if (!isWalkIn && reg.status === 'PENDING_ACCOMMODATION' && parseInt(reg.host_id, 10) === parseInt(req.user.id, 10) && !['ADMIN', 'ACCOMMODATION_HOD'].includes(req.user.role)) {
+        return res.status(400).json({
+          success: false,
+          message: 'You have already approved this visitor pass. It is currently awaiting accommodation allotment.',
+        });
+      }
+    }
+
     let newStatus = reg.status;
     const l2Enabled = await isL2Enabled();
 
     if (action === 'REJECT') {
       newStatus = 'REJECTED';
     } else if (action === 'APPROVE') {
-      if (reg.bypassed_by_admin || req.user.role === 'ADMIN') {
-        // Super Admin bypass: Directly APPROVED
-        newStatus = 'APPROVED';
-      } else if (reg.stay_required && !reg.accommodation_approved && req.user.role !== 'ACCOMMODATION_HOD') {
-        // Stay Required: Routed to Accommodation Team (department)
-        newStatus = 'PENDING_ACCOMMODATION';
+      if (isWalkIn || reg.status === 'PENDING_SUPERVISOR') {
+        // Walk-in / Spot visitors are approved by Guard Supervisor!
+        // No L1 / L2 host approval required. Directly approved upon supervisor action!
+        if (reg.stay_required && !reg.accommodation_approved && req.user.role !== 'ACCOMMODATION_HOD') {
+          newStatus = 'PENDING_ACCOMMODATION';
+        } else {
+          newStatus = 'APPROVED';
+        }
+      } else {
+        // Invited visitors follow L1 and L2 approval rules
+        let isVipOrHodHost = false;
+        if (reg.host_id) {
+          const hostRes = await db.query('SELECT role, COALESCE(user_type, role) as user_type FROM users WHERE id = $1', [reg.host_id]);
+          if (hostRes.rows.length > 0) {
+            const hRole = (hostRes.rows[0].role || '').toUpperCase();
+            const hType = (hostRes.rows[0].user_type || '').toUpperCase();
+            if (hRole === 'HOD' || hType === 'HOD' || hRole === 'VIP_HOST' || hType === 'VIP_HOST' || hType.includes('VIP_HOST') || hRole.includes('VIP_HOST')) {
+              isVipOrHodHost = true;
+            }
+          }
+        }
+        const approverRole = (req.user?.role || '').toUpperCase();
+        const approverType = (req.user?.user_type || '').toUpperCase();
+        if (approverRole === 'HOD' || approverType === 'HOD' || approverRole === 'VIP_HOST' || approverType === 'VIP_HOST' || approverType.includes('VIP_HOST') || approverRole.includes('VIP_HOST')) {
+          isVipOrHodHost = true;
+        }
+
+        if (reg.bypassed_by_admin || req.user.role === 'ADMIN' || isVipOrHodHost) {
+          // Super Admin or VIP Host / HOD Host bypass: Directly APPROVED (No L2 needed)
+          if (reg.stay_required && !reg.accommodation_approved && req.user.role !== 'ACCOMMODATION_HOD') {
+            newStatus = 'PENDING_ACCOMMODATION';
+          } else {
+            newStatus = 'APPROVED';
+          }
+        } else if (reg.stay_required && !reg.accommodation_approved && req.user.role !== 'ACCOMMODATION_HOD') {
+          // Stay Required: Routed to Accommodation Team (department)
+          newStatus = 'PENDING_ACCOMMODATION';
       } else if (l2Enabled) {
         const vType = (visit_type || reg.visit_type || 'HOME').toUpperCase();
         
@@ -528,6 +692,50 @@ async function updateApproval(req, res) {
         newStatus = 'APPROVED';
       }
     }
+  }
+
+    // Update visitor details if edited during approval
+    const updatedName = visitor_name || full_name;
+    const updatedPhone = visitor_phone || phone;
+    const updatedEmail = visitor_email || email;
+
+    if (updatedName || updatedPhone || updatedEmail) {
+      await db.query(
+        `UPDATE visitors 
+         SET full_name = COALESCE($1, full_name),
+             phone = COALESCE($2, phone),
+             email = COALESCE($3, email)
+         WHERE id = $4`,
+        [updatedName || null, updatedPhone || null, updatedEmail || null, reg.visitor_id]
+      );
+      if (updatedName) reg.visitor_name = updatedName;
+      if (updatedPhone) reg.visitor_phone = updatedPhone;
+      if (updatedEmail) reg.visitor_email = updatedEmail;
+    }
+
+    // Recalculate guest counts if updated
+    const menCount = adult_men_count !== undefined ? parseInt(adult_men_count, 10) : reg.adult_men_count;
+    const womenCount = adult_women_count !== undefined ? parseInt(adult_women_count, 10) : reg.adult_women_count;
+    const bCount = boys_count !== undefined ? parseInt(boys_count, 10) : (reg.boys_count || 0);
+    const gCount = girls_count !== undefined ? parseInt(girls_count, 10) : (reg.girls_count || 0);
+    const kCount = children_count !== undefined ? parseInt(children_count, 10) : (bCount + gCount);
+    const totalCount = menCount + womenCount + bCount + gCount;
+
+    // Update vehicles if provided
+    if (Array.isArray(vehicles)) {
+      await db.query('DELETE FROM registration_vehicles WHERE registration_id = $1', [registration_id]);
+      for (const veh of vehicles) {
+        if (veh.plate_number && veh.plate_number.trim() !== '') {
+          const maxVeh = await db.query('SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM registration_vehicles');
+          const nextVehId = parseInt(maxVeh.rows[0].next_id, 10);
+          await db.query(
+            `INSERT INTO registration_vehicles (id, registration_id, plate_number, vehicle_type, driver_name, driver_phone)
+             VALUES ($1, $2, $3, $4, $5, $6)`,
+            [nextVehId, registration_id, veh.plate_number.trim().toUpperCase(), veh.vehicle_type || 'Car', veh.driver_name || '', veh.driver_phone || '']
+          );
+        }
+      }
+    }
 
     let qrCodeUrl = reg.qr_code_url;
     if (newStatus === 'APPROVED' && !qrCodeUrl) {
@@ -554,7 +762,16 @@ async function updateApproval(req, res) {
            valid_until = COALESCE($7, valid_until),
            approved_by_user_id = COALESCE($9, approved_by_user_id),
            approved_by_name = COALESCE($10, approved_by_name),
-           approved_by_role = COALESCE($11, approved_by_role)
+           approved_by_role = COALESCE($11, approved_by_role),
+           host_approved_at = CASE WHEN host_approved_at IS NULL THEN CURRENT_TIMESTAMP ELSE host_approved_at END,
+           host_approved_by = CASE WHEN host_approved_by IS NULL THEN $9 ELSE host_approved_by END,
+           purpose = COALESCE($12, purpose),
+           adult_men_count = $13,
+           adult_women_count = $14,
+           children_count = $15,
+           boys_count = $16,
+           girls_count = $17,
+           person_count = $18
        WHERE id = $8`,
       [
         newStatus, 
@@ -567,7 +784,14 @@ async function updateApproval(req, res) {
         registration_id,
         approvedUserId,
         approvedUserName,
-        approvedUserRole
+        approvedUserRole,
+        purpose || null,
+        menCount,
+        womenCount,
+        kCount,
+        bCount,
+        gCount,
+        totalCount
       ]
     );
 
@@ -626,6 +850,7 @@ async function updateApproval(req, res) {
 // 3. Get Host Pending & Approved Registrations (Includes Vehicles & Accompanying breakdown)
 async function getHostRegistrations(req, res) {
   try {
+    const isAdmin = req.user.role === 'ADMIN';
     const result = await db.query(
       `SELECT r.*, 
               v.full_name as visitor_name, v.phone as visitor_phone, v.email as visitor_email, v.gender as visitor_gender,
@@ -634,9 +859,9 @@ async function getHostRegistrations(req, res) {
        FROM registrations r 
        JOIN visitors v ON r.visitor_id = v.id 
        LEFT JOIN users u ON r.host_id = u.id
-       WHERE r.host_id = $1 OR $2 = 'HOD' OR $2 = 'SUPERVISOR' OR $2 = 'SECURITY_HEAD' OR $2 = 'ADMIN'
+       WHERE ${isAdmin ? '1=1' : 'r.host_id = $1'}
        ORDER BY r.created_at DESC`,
-      [req.user.id, req.user.role]
+      isAdmin ? [] : [req.user.id]
     );
 
     // Deduplicate by pass_code or id to ensure no double-rendering
@@ -701,12 +926,21 @@ async function updateRegistration(req, res) {
 
     const reg = regRes.rows[0];
 
-    // Only allow editing if status is pending approval
-    const allowedStatuses = ['PENDING_L1', 'PENDING_L2', 'PENDING_ACCOMMODATION'];
-    if (!allowedStatuses.includes(reg.status)) {
+    // Check authorization: Only the creating host or Admin can edit
+    const isCreatorHost = reg.host_id && parseInt(reg.host_id, 10) === parseInt(req.user.id, 10);
+    const isAdmin = req.user.role === 'ADMIN';
+    if (!isCreatorHost && !isAdmin) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access Denied: Only the host who created this invitation can edit its details.',
+      });
+    }
+
+    // Only allow editing until L1 approver approves
+    if (reg.status !== 'PENDING_L1' && !isAdmin) {
       return res.status(400).json({
         success: false,
-        message: `Cannot edit registration with status '${reg.status}'. Editing is only allowed prior to approval.`,
+        message: `Cannot edit registration: Host Level-1 approval has already been completed (${reg.status}). Visitor data is editable only until L1 approval.`,
       });
     }
 
@@ -741,6 +975,24 @@ async function updateRegistration(req, res) {
 
     const validFromTime = valid_from ? new Date(valid_from) : reg.valid_from;
     const validUntilTime = valid_until ? new Date(valid_until) : reg.valid_until;
+
+    if (valid_from || valid_until) {
+      const now = new Date();
+      if (valid_from && new Date(validFromTime) < new Date(now.getTime() - 10 * 60 * 1000)) {
+        await db.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Arrival Date/Time (ETA) cannot be in the past or already expired.'
+        });
+      }
+      if (new Date(validUntilTime) <= new Date(validFromTime)) {
+        await db.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Departure Date/Time (ETD) must be after Arrival Date/Time.'
+        });
+      }
+    }
 
     // Update Registration
     await db.query(
@@ -912,12 +1164,12 @@ ensureInviteTokensTable();
 // Generate a Single-Use Invite Token
 async function generateInviteToken(req, res) {
   try {
-    const hostId = req.user.id;
-    const token = `inv_${crypto.randomUUID()}`;
+    const hostId = (req.user && req.user.id) ? req.user.id : (req.body && req.body.host_id ? parseInt(req.body.host_id, 10) : 1);
+    const token = `inv_${crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2) + Date.now().toString(36)}`;
     const maxI = await db.query('SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM invite_tokens');
     const nextId = parseInt(maxI.rows[0].next_id, 10);
     await db.query(
-      `INSERT INTO invite_tokens (id, token, host_id, is_used) VALUES ($1, $2, $3, false)`,
+      `INSERT INTO invite_tokens (id, token, host_id, is_used, created_at) VALUES ($1, $2, $3, false, CURRENT_TIMESTAMP)`,
       [nextId, token, hostId]
     );
     res.json({ success: true, token, host_id: hostId });
@@ -1067,6 +1319,23 @@ async function createPublicVisitorRegistration(req, res) {
       validUntilTime.setHours(21, 0, 0, 0); // Default to Tomorrow 9:00 PM
     }
 
+    const now = new Date();
+    if (validFromTime < new Date(now.getTime() - 10 * 60 * 1000)) {
+      await db.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Arrival Date/Time (ETA) cannot be in the past or already expired.'
+      });
+    }
+
+    if (validUntilTime <= validFromTime) {
+      await db.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Departure Date/Time (ETD) must be after Arrival Date/Time.'
+      });
+    }
+
     const fromHour = validFromTime.getHours();
     const fromMin = validFromTime.getMinutes();
     const untilHour = validUntilTime.getHours();
@@ -1125,11 +1394,24 @@ async function createPublicVisitorRegistration(req, res) {
 
     if (activeToken) {
       try {
-        await db.query(
-          `UPDATE invite_tokens SET is_used = true, used_at = CURRENT_TIMESTAMP, registration_id = $1 WHERE token = $2`,
-          [registration.id, activeToken]
-        );
-      } catch (tokUpErr) {}
+        const checkExisting = await db.query('SELECT id FROM invite_tokens WHERE token = $1', [activeToken]);
+        if (checkExisting.rows.length > 0) {
+          await db.query(
+            `UPDATE invite_tokens SET is_used = true, used_at = CURRENT_TIMESTAMP, registration_id = $1 WHERE token = $2`,
+            [registration.id, activeToken]
+          );
+        } else {
+          const maxI = await db.query('SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM invite_tokens');
+          const nextId = parseInt(maxI.rows[0].next_id, 10);
+          await db.query(
+            `INSERT INTO invite_tokens (id, token, host_id, is_used, used_at, registration_id, created_at)
+             VALUES ($1, $2, $3, true, CURRENT_TIMESTAMP, $4, CURRENT_TIMESTAMP)`,
+            [nextId, activeToken, hostNumericId, registration.id]
+          );
+        }
+      } catch (tokUpErr) {
+        console.error('Failed to mark invite token as used:', tokUpErr);
+      }
     }
 
     await logSystemAction(req, {

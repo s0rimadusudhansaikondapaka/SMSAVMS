@@ -82,6 +82,7 @@ function computeVisitorStatuses(reg, customNow) {
   let approvalLabel = isApproved ? 'Approved' : isRejected ? 'Rejected' : 'Not Yet Approved';
   if (reg.status === 'PENDING_L1') approvalLabel = 'Not Yet Approved (Awaiting Host Approval)';
   if (reg.status === 'PENDING_L2') approvalLabel = 'Not Yet Approved (Awaiting L2 Approval)';
+  if (reg.status === 'PENDING_SUPERVISOR') approvalLabel = 'Not Yet Approved (Awaiting Guard Supervisor Approval)';
   if (reg.status === 'PENDING_ACCOMMODATION') approvalLabel = 'Not Yet Approved (Awaiting Accommodation Approval)';
 
   return {
@@ -220,7 +221,7 @@ async function verifyGatePass(req, res) {
 
       if (!isApproved) {
         arrivalStatus = 'NOT_APPROVED';
-        arrivalMessage = `⛔ Entry Blocked: Visitor pass is not yet approved. Approval is pending (${reg.status === 'PENDING_L1' ? 'Awaiting Host Approval' : reg.status === 'PENDING_L2' ? 'Awaiting L2 Approval' : reg.status}).`;
+        arrivalMessage = `⛔ Entry Blocked: Visitor pass is not yet approved. Approval is pending (${reg.status === 'PENDING_L1' ? 'Awaiting Host (L1) Approval' : reg.status === 'PENDING_L2' ? 'Awaiting L2 Approval' : reg.status === 'PENDING_SUPERVISOR' ? 'Awaiting Guard Supervisor Approval' : reg.status}).`;
       } else if (!isPerm) {
         if (now < windowStart) {
           arrivalStatus = 'TOO_EARLY';
@@ -592,8 +593,8 @@ async function getSpotRegistrationsQueue(req, res) {
        JOIN visitors v ON r.visitor_id = v.id 
        LEFT JOIN users u ON r.host_id = u.id 
        LEFT JOIN departments d ON u.department_id = d.id
-       WHERE r.registration_type IN ('SPOT_REGISTRATION', 'SPOT_UNFAMILIAR') 
-         AND r.status IN ('PENDING_L1', 'PENDING_L2', 'REJECTED', 'APPROVED', 'INSIDE_CAMPUS')
+       WHERE r.registration_type IN ('SPOT_REGISTRATION', 'SPOT_UNFAMILIAR', 'WALKIN') 
+         AND r.status IN ('PENDING_SUPERVISOR', 'PENDING_SPOT_APPROVAL', 'PENDING_L1', 'PENDING_L2', 'REJECTED', 'APPROVED', 'INSIDE_CAMPUS')
        ORDER BY r.created_at DESC LIMIT 50`
     );
     res.json({ success: true, count: result.rows.length, spot_requests: result.rows });

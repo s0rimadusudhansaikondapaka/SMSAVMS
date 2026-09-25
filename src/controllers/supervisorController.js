@@ -29,7 +29,31 @@ async function supervisorOverride(req, res) {
   try {
     const newStatus = action === 'APPROVE' ? 'APPROVED' : action === 'REJECT' ? 'REJECTED' : 'ESCALATED';
 
-    await db.query(`UPDATE registrations SET status = $1 WHERE id = $2`, [newStatus, registration_id]);
+    let qrCodeUrl = null;
+    if (newStatus === 'APPROVED') {
+      const regRes = await db.query('SELECT pass_code, is_vvip, qr_code_url FROM registrations WHERE id = $1', [registration_id]);
+      if (regRes.rows.length > 0) {
+        const reg = regRes.rows[0];
+        if (!reg.qr_code_url) {
+          const qrData = JSON.stringify({ passCode: reg.pass_code, regId: registration_id, isVvip: reg.is_vvip });
+          qrCodeUrl = await QRCode.toDataURL(qrData);
+        } else {
+          qrCodeUrl = reg.qr_code_url;
+        }
+      }
+    }
+
+    await db.query(
+      `UPDATE registrations 
+       SET status = $1, 
+           qr_code_url = COALESCE($2, qr_code_url),
+           approved_by_user_id = $3, 
+           approved_by_name = $4, 
+           approved_by_role = $5, 
+           approval_timestamp = CURRENT_TIMESTAMP 
+       WHERE id = $6`,
+      [newStatus, qrCodeUrl, req.user.id, req.user.name, req.user.role, registration_id]
+    );
 
     await db.query(
       `INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, remarks) VALUES ($1, $2, $3, $4, $5)`,
@@ -38,7 +62,7 @@ async function supervisorOverride(req, res) {
 
     broadcastSyncEvent('SUPERVISOR_OVERRIDE', { registration_id, action, remarks, status: newStatus });
 
-    res.json({ success: true, message: `Supervisor override executed: ${newStatus}`, status: newStatus });
+    res.json({ success: true, message: `Supervisor approval executed: ${newStatus}`, status: newStatus, qr_code_url: qrCodeUrl });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Supervisor override failed.' });
   }
