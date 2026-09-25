@@ -1100,8 +1100,6 @@ async function getVisitHistory(req, res) {
   }
 }
 
-const crypto = require('crypto');
-
 function generateUserGuid(user) {
   if (!user) return '11111111-2222-4333-a444-555555555555';
   if (user.guid) return user.guid;
