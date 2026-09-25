@@ -40,15 +40,14 @@ async function checkExpiredRequests() {
 // 2. Auto-reject if host hasn't responded within X minutes
 async function checkHostTimeout() {
   try {
-    const timeoutMinutes = parseInt(await getSettingValue('HOST_TIMEOUT_MINUTES', '30'));
+    const timeoutMinutes = parseInt(await getSettingValue('HOST_TIMEOUT_MINUTES', '30'), 10) || 30;
     const result = await db.query(
       `UPDATE registrations 
        SET status = 'REJECTED' 
        WHERE status = 'PENDING_L1' 
        AND host_notified_at IS NOT NULL 
-       AND host_notified_at < CURRENT_TIMESTAMP - INTERVAL '1 minute' * $1
-       RETURNING id, pass_code, host_id`,
-      [timeoutMinutes]
+       AND host_notified_at < CURRENT_TIMESTAMP - INTERVAL '${timeoutMinutes} minutes'
+       RETURNING id, pass_code, host_id`
     );
     if (result.rows.length > 0) {
       console.log(`[Expiry Service] Auto-rejected ${result.rows.length} request(s) due to host timeout:`, result.rows.map(r => r.pass_code));
@@ -70,16 +69,15 @@ async function checkHostTimeout() {
 // 3. Send reminders for requests approaching their arrival time without approval
 async function checkReminders() {
   try {
-    const reminderMinutes = parseInt(await getSettingValue('REMINDER_BEFORE_ARRIVAL_MINUTES', '300')); // Default 300 mins (5 hours prior to arrival)
+    const reminderMinutes = parseInt(await getSettingValue('REMINDER_BEFORE_ARRIVAL_MINUTES', '300'), 10) || 300; // Default 300 mins (5 hours prior to arrival)
     const result = await db.query(
       `SELECT r.id, r.pass_code, r.valid_from, r.host_id, v.full_name as visitor_name
        FROM registrations r
        JOIN visitors v ON r.visitor_id = v.id
        WHERE r.status IN ('PENDING_L1', 'PENDING_L2', 'PENDING_ACCOMMODATION')
        AND r.reminder_sent_at IS NULL
-       AND r.valid_from <= CURRENT_TIMESTAMP + INTERVAL '1 minute' * $1
-       AND r.valid_from > CURRENT_TIMESTAMP`,
-      [reminderMinutes]
+       AND r.valid_from <= CURRENT_TIMESTAMP + INTERVAL '${reminderMinutes} minutes'
+       AND r.valid_from > CURRENT_TIMESTAMP`
     );
     if (result.rows.length > 0) {
       console.log(`[Expiry Service] Sending reminders for ${result.rows.length} request(s):`, result.rows.map(r => r.pass_code));
