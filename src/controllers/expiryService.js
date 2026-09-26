@@ -153,6 +153,40 @@ async function checkSystematicCheckouts() {
   }
 }
 
+// 5. FR-PA-07 Unused Pass Auto-Lapse: A QR Code not used within 8 hours of its scheduled arrival time automatically lapses to "not arrived".
+async function checkUnusedPassesAutoLapse() {
+  try {
+    const result = await db.query(
+      `UPDATE registrations 
+       SET status = 'NOT_ARRIVED',
+           lifecycle_status = 'Not Arrived'
+       WHERE status = 'APPROVED'
+       AND (lifecycle_status = 'Yet to Arrive' OR lifecycle_status IS NULL)
+       AND (first_entry_at IS NULL OR entry_count = 0)
+       AND valid_from + INTERVAL '8 hours' < CURRENT_TIMESTAMP
+       RETURNING id, pass_code`
+    );
+    if (result.rows.length > 0) {
+      console.log(`[Expiry Service] Auto-lapsed ${result.rows.length} unused pass(es) to 'Not Arrived':`, result.rows.map(r => r.pass_code));
+      for (const reg of result.rows) {
+        try {
+          const maxAl = await db.query('SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM audit_logs');
+          const nextAlId = parseInt(maxAl.rows[0].next_id, 10);
+          await db.query(
+            `INSERT INTO audit_logs (id, action, entity_type, entity_id, remarks) VALUES ($1, $2, $3, $4, $5)`,
+            [nextAlId, 'AUTO_LAPSED_NOT_ARRIVED', 'REGISTRATION', reg.id, `Pass auto-lapsed: unused within 8 hours of scheduled arrival time`]
+          );
+        } catch (alErr) {}
+      }
+      broadcastSyncEvent('PASSES_AUTO_LAPSED', { count: result.rows.length, passes: result.rows.map(r => r.pass_code) });
+    }
+    return result.rows;
+  } catch (err) {
+    console.error('[Expiry Service] Error executing unused pass auto-lapse:', err);
+    return [];
+  }
+}
+
 // Start the periodic expiry check service (runs every 2 minutes for fast systematic checkout & reminders)
 function startExpiryService() {
   console.log('[Expiry Service] Starting periodic request expiry, reminder & systematic checkout service...');
@@ -163,6 +197,7 @@ function startExpiryService() {
     await checkHostTimeout();
     await checkReminders();
     await checkSystematicCheckouts();
+    await checkUnusedPassesAutoLapse();
   }, 5000); // 5 second delay after startup
   
   // Then run every 2 minutes
@@ -171,6 +206,7 @@ function startExpiryService() {
     await checkHostTimeout();
     await checkReminders();
     await checkSystematicCheckouts();
+    await checkUnusedPassesAutoLapse();
   }, 2 * 60 * 1000);
 }
 
@@ -179,6 +215,7 @@ module.exports = {
   checkHostTimeout,
   checkReminders,
   checkSystematicCheckouts,
+  checkUnusedPassesAutoLapse,
   startExpiryService,
 };
 
