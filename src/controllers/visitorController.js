@@ -1068,31 +1068,51 @@ async function updateRegistration(req, res) {
 // 5. Get Visit History (All allowed/approved, inside, checked-out, and processed visits)
 async function getVisitHistory(req, res) {
   try {
-    const result = await db.query(
-      `SELECT r.*, 
-              v.full_name as visitor_name, v.phone as visitor_phone, v.visitor_category,
-              v.photo_url,
-              u.name as host_name,
-              gl_in.timestamp as entry_time, gl_in.gate_name as entry_gate,
-              gl_out.timestamp as exit_time, gl_out.gate_name as exit_gate
-       FROM registrations r 
-       JOIN visitors v ON r.visitor_id = v.id 
-       LEFT JOIN users u ON r.host_id = u.id
-       LEFT JOIN LATERAL (
-         SELECT timestamp, gate_name FROM gate_logs 
-         WHERE registration_id = r.id AND direction = 'IN' 
-         ORDER BY timestamp DESC LIMIT 1
-       ) gl_in ON true
-       LEFT JOIN LATERAL (
-         SELECT timestamp, gate_name FROM gate_logs 
-         WHERE registration_id = r.id AND direction = 'OUT' 
-         ORDER BY timestamp DESC LIMIT 1
-       ) gl_out ON true
-       WHERE (r.host_id = $1 OR $2 IN ('HOD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'))
-       ORDER BY r.created_at DESC
-       LIMIT 200`,
-      [req.user.id, req.user.role]
-    );
+    let result;
+    try {
+      result = await db.query(
+        `SELECT r.*, 
+                v.full_name as visitor_name, v.phone as visitor_phone, v.visitor_category,
+                v.photo_url,
+                u.name as host_name,
+                gl_in.timestamp as entry_time, gl_in.gate_name as entry_gate,
+                gl_out.timestamp as exit_time, gl_out.gate_name as exit_gate
+         FROM registrations r 
+         JOIN visitors v ON r.visitor_id = v.id 
+         LEFT JOIN users u ON r.host_id = u.id
+         LEFT JOIN LATERAL (
+           SELECT timestamp, gate_name FROM gate_logs 
+           WHERE registration_id = r.id AND direction = 'IN' 
+           ORDER BY timestamp DESC LIMIT 1
+         ) gl_in ON true
+         LEFT JOIN LATERAL (
+           SELECT timestamp, gate_name FROM gate_logs 
+           WHERE registration_id = r.id AND direction = 'OUT' 
+           ORDER BY timestamp DESC LIMIT 1
+         ) gl_out ON true
+         WHERE (r.host_id = $1 OR $2 IN ('HOD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'))
+         ORDER BY r.created_at DESC
+         LIMIT 200`,
+        [req.user.id, req.user.role]
+      );
+    } catch (lateralErr) {
+      console.warn('Lateral join in visit history failed, falling back to standard query:', lateralErr.message);
+      result = await db.query(
+        `SELECT r.*, 
+                v.full_name as visitor_name, v.phone as visitor_phone, v.visitor_category,
+                v.photo_url,
+                u.name as host_name,
+                NULL as entry_time, NULL as entry_gate,
+                NULL as exit_time, NULL as exit_gate
+         FROM registrations r 
+         JOIN visitors v ON r.visitor_id = v.id 
+         LEFT JOIN users u ON r.host_id = u.id
+         WHERE (r.host_id = $1 OR $2 IN ('HOD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'))
+         ORDER BY r.created_at DESC
+         LIMIT 200`,
+        [req.user.id, req.user.role]
+      );
+    }
     res.json({ success: true, history: result.rows });
   } catch (err) {
     console.error('Error fetching visit history:', err);
