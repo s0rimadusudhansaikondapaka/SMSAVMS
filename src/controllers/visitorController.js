@@ -84,7 +84,7 @@ async function createRegistration(req, res) {
         await db.query('ROLLBACK');
         return res.status(400).json({
           success: false,
-          message: 'Arrival Date/Time (ETA) cannot be in the past or already expired.'
+          message: 'Scheduled Arrival Date/Time (SAT) cannot be in the past or already expired.'
         });
       }
 
@@ -92,7 +92,7 @@ async function createRegistration(req, res) {
         await db.query('ROLLBACK');
         return res.status(400).json({
           success: false,
-          message: 'Departure Date/Time (ETD) must be after Arrival Date/Time.'
+          message: 'Scheduled Departure Date/Time (SDT) must be after Scheduled Arrival Date/Time (SAT).'
         });
       }
 
@@ -105,7 +105,7 @@ async function createRegistration(req, res) {
         await db.query('ROLLBACK');
         return res.status(400).json({
           success: false,
-          message: 'Estimated Time of Arrival (ETA) must be between 5:00 AM and 10:00 PM.'
+          message: 'Scheduled Arrival Time (SAT) must be between 5:00 AM and 10:00 PM.'
         });
       }
 
@@ -113,7 +113,7 @@ async function createRegistration(req, res) {
         await db.query('ROLLBACK');
         return res.status(400).json({
           success: false,
-          message: 'Estimated Time of Departure (ETD) must be between 5:00 AM and 10:00 PM.'
+          message: 'Scheduled Departure Time (SDT) must be between 5:00 AM and 10:00 PM.'
         });
       }
     }
@@ -982,14 +982,14 @@ async function updateRegistration(req, res) {
         await db.query('ROLLBACK');
         return res.status(400).json({
           success: false,
-          message: 'Arrival Date/Time (ETA) cannot be in the past or already expired.'
+          message: 'Scheduled Arrival Date/Time (SAT) cannot be in the past or already expired.'
         });
       }
       if (new Date(validUntilTime) <= new Date(validFromTime)) {
         await db.query('ROLLBACK');
         return res.status(400).json({
           success: false,
-          message: 'Departure Date/Time (ETD) must be after Arrival Date/Time.'
+          message: 'Scheduled Departure Date/Time (SDT) must be after Scheduled Arrival Date/Time (SAT).'
         });
       }
     }
@@ -1342,7 +1342,7 @@ async function createPublicVisitorRegistration(req, res) {
       await db.query('ROLLBACK');
       return res.status(400).json({
         success: false,
-        message: 'Arrival Date/Time (ETA) cannot be in the past or already expired.'
+        message: 'Scheduled Arrival Date/Time (SAT) cannot be in the past or already expired.'
       });
     }
 
@@ -1350,7 +1350,7 @@ async function createPublicVisitorRegistration(req, res) {
       await db.query('ROLLBACK');
       return res.status(400).json({
         success: false,
-        message: 'Departure Date/Time (ETD) must be after Arrival Date/Time.'
+        message: 'Scheduled Departure Date/Time (SDT) must be after Scheduled Arrival Date/Time (SAT).'
       });
     }
 
@@ -1363,7 +1363,7 @@ async function createPublicVisitorRegistration(req, res) {
       await db.query('ROLLBACK');
       return res.status(400).json({
         success: false,
-        message: 'Estimated Time of Arrival (ETA) must be between 5:00 AM and 10:00 PM.'
+        message: 'Scheduled Arrival Time (SAT) must be between 5:00 AM and 10:00 PM.'
       });
     }
 
@@ -1371,7 +1371,7 @@ async function createPublicVisitorRegistration(req, res) {
       await db.query('ROLLBACK');
       return res.status(400).json({
         success: false,
-        message: 'Estimated Time of Departure (ETD) must be between 5:00 AM and 10:00 PM.'
+        message: 'Scheduled Departure Time (SDT) must be between 5:00 AM and 10:00 PM.'
       });
     }
 

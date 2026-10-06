@@ -15,7 +15,7 @@ function computeVisitorStatuses(reg, customNow) {
   const isPending = String(reg.status || '').startsWith('PENDING');
   const isRejected = reg.status === 'REJECTED';
 
-  // Point 5 & 6: Earliest arrival window is max(5:00 AM of ETA date, ETA - 8 hours), not exceeding ETD
+  // Point 5 & 6: Earliest arrival window is max(5:00 AM of SAT date, SAT - 8 hours), not exceeding SDT
   const validFromDate = new Date(validFrom);
   const day5AM = new Date(validFromDate.getFullYear(), validFromDate.getMonth(), validFromDate.getDate(), 5, 0, 0, 0);
   const raw8HoursPrior = new Date(validFrom.getTime() - 8 * 60 * 60 * 1000);
@@ -44,22 +44,22 @@ function computeVisitorStatuses(reg, customNow) {
     // Has entered campus at least once
     if (isCurrentlyInsideDB) {
       if (departureTimePassed) {
-        // Point 12: Staying inside past ETD -> CHECKED-IN and over_stayed
+        // Point 12: Staying inside past SDT -> CHECKED-IN and over_stayed
         lifecycleStatus = 'CHECKED-IN';
         presenceStatus = 'over_stayed';
       } else {
-        // Point 8 & 10: Inside campus within ETD -> CHECKED-IN and currently_inside
+        // Point 8 & 10: Inside campus within SDT -> CHECKED-IN and currently_inside
         lifecycleStatus = 'CHECKED-IN';
         presenceStatus = 'currently_inside';
       }
     } else {
       // Currently outside campus (either exited temporarily or checked-out)
       if (departureTimePassed || reg.status === 'CHECKED_OUT' || reg.lifecycle_status === 'CHECKED-OUT') {
-        // Point 11: Left and did not return by ETD -> CHECKED-OUT and currently_outside
+        // Point 11: Left and did not return by SDT -> CHECKED-OUT and currently_outside
         lifecycleStatus = 'CHECKED-OUT';
         presenceStatus = 'currently_outside';
       } else {
-        // Point 9: Gone out within ETD -> CHECKED-IN and currently_outside
+        // Point 9: Gone out within SDT -> CHECKED-IN and currently_outside
         lifecycleStatus = 'CHECKED-IN';
         presenceStatus = 'currently_outside';
       }
@@ -69,13 +69,13 @@ function computeVisitorStatuses(reg, customNow) {
   // Button Enablement Validations (Point 4, 8, 9, 10, 11, 12):
   // IN button:
   // - MUST be approved
-  // - Enabled if within arrival window AND before ETD (!departureTimePassed)
-  // - AND presence is currently_outside (either Yet to Arrive or re-entry within ETD)
+  // - Enabled if within arrival window AND before SDT (!departureTimePassed)
+  // - AND presence is currently_outside (either Yet to Arrive or re-entry within SDT)
   // - AND not already CHECKED-OUT
   const isInEnabled = isApproved && isWithinArrivalWindow && !departureTimePassed && presenceStatus === 'currently_outside' && lifecycleStatus !== 'CHECKED-OUT';
 
   // OUT button:
-  // - Enabled if Visitor's status is 'currently_inside' (within ETD) or 'over_stayed' (past ETD)
+  // - Enabled if Visitor's status is 'currently_inside' (within SDT) or 'over_stayed' (past SDT)
   // - Disabled once CHECKED-OUT or when currently_outside
   const isOutEnabled = presenceStatus === 'currently_inside' || presenceStatus === 'over_stayed';
 
@@ -377,12 +377,12 @@ async function processGateMovement(req, res) {
         return res.status(400).json({ success: false, message: `Cannot process IN entry. Pass status is ${reg.status}` });
       }
 
-      // Rule 7: IN button should be only enabled till the Visitor's estimated departure time. After that IN button should be disabled.
+      // Rule 7: IN button should be only enabled till the Visitor's scheduled departure time, SDT. After that IN button should be disabled.
       if (!isPerm && now > validUntil) {
         await db.query('ROLLBACK');
         return res.status(400).json({
           success: false,
-          message: `Estimated departure time (${validUntil.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}) has passed. IN entry is disabled.`,
+          message: `Scheduled departure time, SDT (${validUntil.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}) has passed. IN entry is disabled.`,
         });
       }
 
@@ -769,7 +769,7 @@ async function getInvitedVisitors(req, res) {
     let whereClauses = [];
 
     // Filter 1: Valid time window (+8 hours upcoming, but not before 5 AM of arrival date) OR already checked-in visitors
-    // Point 6 & 7: Once ETA-8 hours comes (not preceding 5 AM), show in list with 'Yet to Arrive'
+    // Point 6 & 7: Once SAT-8 hours comes (not preceding 5 AM), show in list with 'Yet to Arrive'
     whereClauses.push(`(
       (
         r.status IN ('APPROVED', 'INSIDE_CAMPUS')

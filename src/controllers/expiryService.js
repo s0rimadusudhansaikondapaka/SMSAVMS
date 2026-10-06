@@ -124,7 +124,7 @@ async function checkSystematicCheckouts() {
           const nextAlId = parseInt(maxAl.rows[0].next_id, 10);
           await db.query(
             `INSERT INTO audit_logs (id, action, entity_type, entity_id, remarks) VALUES ($1, $2, $3, $4, $5)`,
-            [nextAlId, 'SYSTEMATIC_CHECKOUT', 'REGISTRATION', reg.id, `Visitor systematically CHECKED-OUT: estimated departure time elapsed while currently outside campus`]
+            [nextAlId, 'SYSTEMATIC_CHECKOUT', 'REGISTRATION', reg.id, `Visitor systematically CHECKED-OUT: scheduled departure time (SDT) elapsed while currently outside campus`]
           );
         } catch (alErr) {}
       }
