@@ -34,6 +34,7 @@ async function runUpdate() {
     await uatPool.query(`ALTER TABLE registrations ADD COLUMN IF NOT EXISTS approved_by_user_id INTEGER;`);
     await uatPool.query(`ALTER TABLE registrations ADD COLUMN IF NOT EXISTS approved_by_name VARCHAR(150);`);
     await uatPool.query(`ALTER TABLE registrations ADD COLUMN IF NOT EXISTS approved_by_role VARCHAR(50);`);
+    await uatPool.query(`ALTER TABLE registrations ADD COLUMN IF NOT EXISTS approval_timestamp TIMESTAMP;`);
     await uatPool.query(`ALTER TABLE registrations ADD COLUMN IF NOT EXISTS family_member_id INT;`);
     await uatPool.query(`ALTER TABLE registrations ADD COLUMN IF NOT EXISTS relationship_to_resident VARCHAR(100);`);
 

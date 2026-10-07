@@ -1,5 +1,5 @@
 -- Exported UAT Schema DDL
--- Generated on 2026-09-01T11:11:31.222Z
+-- Generated on 2026-10-07T11:02:43.056Z
 
 CREATE TABLE IF NOT EXISTS approvers_config (
   id SERIAL PRIMARY KEY,
@@ -27,11 +27,65 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   guid VARCHAR(64)
 );
 
+CREATE TABLE IF NOT EXISTS delivery_persons (
+  id SERIAL PRIMARY KEY,
+  guid VARCHAR(64),
+  full_name VARCHAR(255) NOT NULL,
+  phone VARCHAR(50) NOT NULL,
+  company_name VARCHAR(255),
+  id_type VARCHAR(100) DEFAULT 'Aadhaar'::character varying,
+  id_number VARCHAR(100),
+  photo_url TEXT,
+  vehicle_type VARCHAR(50) DEFAULT 'Two Wheeler'::character varying,
+  vehicle_number VARCHAR(100),
+  destination_host_id INTEGER,
+  status VARCHAR(50) DEFAULT 'PENDING'::character varying,
+  created_by_user_id INTEGER,
+  created_by_role VARCHAR(50),
+  approved_by_user_id INTEGER,
+  approved_by_name VARCHAR(255),
+  supervisor_notified_at TIMESTAMP WITHOUT TIME ZONE,
+  approved_at TIMESTAMP WITHOUT TIME ZONE,
+  current_visit_status VARCHAR(50) DEFAULT 'OUT'::character varying,
+  last_entry_at TIMESTAMP WITHOUT TIME ZONE,
+  last_exit_at TIMESTAMP WITHOUT TIME ZONE,
+  active_registration_id INTEGER,
+  created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  id_card_image_url TEXT
+);
+
 CREATE TABLE IF NOT EXISTS departments (
   id SERIAL PRIMARY KEY,
   name VARCHAR(100) NOT NULL,
   created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
   hod_user_id INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS device_duty_sessions (
+  id SERIAL PRIMARY KEY,
+  device_id VARCHAR(50),
+  guard_id INTEGER,
+  guard_name VARCHAR(150),
+  guard_phone VARCHAR(50),
+  guard_code VARCHAR(50),
+  duty_date DATE,
+  checked_in_at TIMESTAMP WITHOUT TIME ZONE,
+  checked_out_at TIMESTAMP WITHOUT TIME ZONE,
+  status VARCHAR(20),
+  gate_name VARCHAR(100),
+  created_at TIMESTAMP WITHOUT TIME ZONE
+);
+
+CREATE TABLE IF NOT EXISTS devices (
+  id SERIAL PRIMARY KEY,
+  device_id VARCHAR(50),
+  device_name VARCHAR(100),
+  secret_code VARCHAR(255),
+  gate_name VARCHAR(100),
+  status VARCHAR(20),
+  last_active_at TIMESTAMP WITHOUT TIME ZONE,
+  created_at TIMESTAMP WITHOUT TIME ZONE,
+  updated_at TIMESTAMP WITHOUT TIME ZONE
 );
 
 CREATE TABLE IF NOT EXISTS feedback (
@@ -77,6 +131,26 @@ CREATE TABLE IF NOT EXISTS gate_logs (
   timestamp TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
   remarks TEXT,
   guid VARCHAR(64)
+);
+
+CREATE TABLE IF NOT EXISTS incidents (
+  id SERIAL PRIMARY KEY,
+  incident_id VARCHAR(64),
+  incident_type VARCHAR(100),
+  severity VARCHAR(50),
+  description TEXT,
+  gate_name VARCHAR(100),
+  device_id VARCHAR(100),
+  guard_id INTEGER,
+  guard_name VARCHAR(150),
+  pass_code VARCHAR(100),
+  vehicle_no VARCHAR(100),
+  photo_url TEXT,
+  status VARCHAR(50),
+  resolution_notes TEXT,
+  resolved_by VARCHAR(150),
+  created_at TIMESTAMP WITHOUT TIME ZONE,
+  resolved_at TIMESTAMP WITHOUT TIME ZONE
 );
 
 CREATE TABLE IF NOT EXISTS invite_tokens (
@@ -139,10 +213,18 @@ CREATE TABLE IF NOT EXISTS registrations (
   approved_by_user_id INTEGER,
   approved_by_name VARCHAR(150),
   approved_by_role VARCHAR(50),
-  approval_timestamp TIMESTAMP WITHOUT TIME ZONE,
   family_member_id INTEGER,
   relationship_to_resident VARCHAR(100),
-  guid VARCHAR(64)
+  guid VARCHAR(64),
+  vehicle_no VARCHAR(100),
+  lifecycle_status VARCHAR(50) DEFAULT 'Yet to Arrive'::character varying,
+  presence_status VARCHAR(50) DEFAULT 'currently_outside'::character varying,
+  first_entry_at TIMESTAMP WITHOUT TIME ZONE,
+  last_entry_at TIMESTAMP WITHOUT TIME ZONE,
+  last_exit_at TIMESTAMP WITHOUT TIME ZONE,
+  host_approved_at TIMESTAMP WITHOUT TIME ZONE,
+  host_approved_by INTEGER,
+  approval_timestamp TIMESTAMP WITHOUT TIME ZONE
 );
 
 CREATE TABLE IF NOT EXISTS resident_absences (
