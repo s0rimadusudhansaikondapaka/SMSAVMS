@@ -162,19 +162,19 @@ function getHostInvitationPermissions(userType, userRole) {
     case 'VIP_HOST':
       return {
         canInviteResidence: false, canInviteOffice: false, canInviteVip: true,
-        allowedCategories: ['VIP', 'VVIP'],
-        allowedVisitTypes: ['BHAJAN', 'EVENT', 'TOUR', 'OFFICE'],
+        allowedCategories: ['VIP', 'VVIP', 'GENERAL'],
+        allowedVisitTypes: ['BHAJAN', 'EVENT', 'TOUR', 'OFFICE', 'HOME'],
       };
     case 'EMPLOYEE':
       return {
         canInviteResidence: false, canInviteOffice: true, canInviteVip: false,
-        allowedCategories: ['GENERAL', 'DELIVERY', 'VENDOR', 'CONTRACTOR', 'FOREIGN_NATIONAL'],
+        allowedCategories: ['GENERAL', 'VIP', 'DELIVERY', 'VENDOR', 'CONTRACTOR', 'FOREIGN_NATIONAL'],
         allowedVisitTypes: ['OFFICE', 'BHAJAN', 'EVENT'],
       };
     case 'RESIDENT':
       return {
         canInviteResidence: true, canInviteOffice: false, canInviteVip: false,
-        allowedCategories: ['GENERAL', 'FAMILY_MEMBER', 'MAID', 'FREQUENT_VISITOR', 'FOREIGN_NATIONAL'],
+        allowedCategories: ['GENERAL', 'VIP', 'FAMILY_MEMBER', 'MAID', 'FREQUENT_VISITOR', 'FOREIGN_NATIONAL'],
         allowedVisitTypes: ['HOME', 'BHAJAN', 'EVENT'],
       };
     case 'PRO':
@@ -186,7 +186,7 @@ function getHostInvitationPermissions(userType, userRole) {
     case 'RESIDENT_EMPLOYEE':
       return {
         canInviteResidence: true, canInviteOffice: true, canInviteVip: false,
-        allowedCategories: ['GENERAL', 'FAMILY_MEMBER', 'MAID', 'FREQUENT_VISITOR', 'DELIVERY', 'VENDOR', 'FOREIGN_NATIONAL'],
+        allowedCategories: ['GENERAL', 'VIP', 'FAMILY_MEMBER', 'MAID', 'FREQUENT_VISITOR', 'DELIVERY', 'VENDOR', 'FOREIGN_NATIONAL'],
         allowedVisitTypes: ['HOME', 'OFFICE', 'BHAJAN', 'EVENT'],
       };
     case 'RESIDENT_VIP_HOST':
@@ -390,13 +390,18 @@ function getHostInvitationPermissions(userType, userRole) {
     if (initialStatus === 'APPROVED') {
       const qrData = JSON.stringify({ passCode, regId: nextRegId, isVvip: is_vvip || false });
       const qrCodeUrl = await QRCode.toDataURL(qrData);
+      const approverName = req.user?.name || (isSpotOrWalkin ? 'Guard Supervisor' : 'Direct Host Approval');
+      const approverRole = req.user?.role || (isSpotOrWalkin ? 'SUPERVISOR' : 'HOST');
       await db.query(
         `UPDATE registrations 
          SET qr_code_url = $1, approved_by_user_id = $2, approved_by_name = $3, approved_by_role = $4, approval_timestamp = CURRENT_TIMESTAMP 
          WHERE id = $5`,
-        [qrCodeUrl, req.user?.id || null, req.user?.name || 'Guard Supervisor', req.user?.role || 'SUPERVISOR', nextRegId]
+        [qrCodeUrl, req.user?.id || null, approverName, approverRole, nextRegId]
       );
       registration.qr_code_url = qrCodeUrl;
+      registration.approved_by_name = approverName;
+      registration.approved_by_role = approverRole;
+      registration.approval_timestamp = new Date();
     }
 
     // Set host notification timestamp for timeout tracking (for invited visitors awaiting L1)
@@ -417,19 +422,6 @@ function getHostInvitationPermissions(userType, userRole) {
           [nextVehId, registration.id, veh.plate_number, vType, veh.driver_name || '', veh.driver_phone || '']
         );
       }
-    }
-
-    // Auto-approve QR Code if approved
-    if (initialStatus === 'APPROVED') {
-      const qrData = JSON.stringify({ passCode, regId: registration.id, isVvip: is_vvip });
-      const qrCodeUrl = await QRCode.toDataURL(qrData);
-      await db.query(
-        'UPDATE registrations SET qr_code_url = $1, approved_by_user_id = $2, approved_by_name = $3, approved_by_role = $4 WHERE id = $5',
-        [qrCodeUrl, req.user?.id || null, req.user?.name || 'Referral Host', req.user?.role || 'RESIDENT', registration.id]
-      );
-      registration.qr_code_url = qrCodeUrl;
-      registration.approved_by_name = req.user?.name || 'Referral Host';
-      registration.approved_by_role = req.user?.role || 'RESIDENT';
     }
 
     await logSystemAction(req, {
@@ -485,7 +477,10 @@ function getHostInvitationPermissions(userType, userRole) {
   } catch (err) {
     await db.query('ROLLBACK');
     console.error('Error creating registration:', err);
-    res.status(500).json({ success: false, message: 'Failed to create registration.' });
+    res.status(500).json({ 
+      success: false, 
+      message: err.message || 'Failed to create registration.' 
+    });
   }
 }
 

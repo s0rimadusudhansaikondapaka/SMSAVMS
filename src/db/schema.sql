@@ -139,6 +139,7 @@ CREATE TABLE IF NOT EXISTS registrations (
   approved_by_user_id INTEGER,
   approved_by_name VARCHAR(150),
   approved_by_role VARCHAR(50),
+  approval_timestamp TIMESTAMP WITHOUT TIME ZONE,
   family_member_id INTEGER,
   relationship_to_resident VARCHAR(100),
   guid VARCHAR(64)

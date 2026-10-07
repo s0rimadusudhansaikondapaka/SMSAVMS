@@ -77,6 +77,7 @@ async function runAutoMigrations() {
       ADD COLUMN IF NOT EXISTS approved_by_user_id INTEGER,
       ADD COLUMN IF NOT EXISTS approved_by_name VARCHAR(150),
       ADD COLUMN IF NOT EXISTS approved_by_role VARCHAR(50),
+      ADD COLUMN IF NOT EXISTS approval_timestamp TIMESTAMP,
       ADD COLUMN IF NOT EXISTS family_member_id INT,
       ADD COLUMN IF NOT EXISTS relationship_to_resident VARCHAR(100),
       ADD COLUMN IF NOT EXISTS lifecycle_status VARCHAR(50) DEFAULT 'Yet to Arrive',

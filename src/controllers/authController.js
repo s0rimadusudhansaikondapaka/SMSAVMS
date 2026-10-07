@@ -98,7 +98,7 @@ async function login(req, res) {
       department_name: user.department_name,
     };
 
-    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '12h' });
+    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '30d' });
 
     await logSystemAction({ user, headers: req.headers, socket: req.socket, ip: req.ip }, {
       action: 'USER_LOGIN',
@@ -222,7 +222,7 @@ async function verifyOtp(req, res) {
       department_name: user.department_name,
     };
 
-    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '24h' });
+    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '30d' });
 
     res.json({
       success: true,
