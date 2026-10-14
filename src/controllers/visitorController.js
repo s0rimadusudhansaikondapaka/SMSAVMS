@@ -38,6 +38,7 @@ async function createRegistration(req, res) {
     vehicles, // Array of { plate_number, vehicle_type, driver_name, driver_phone }
     is_spot_registration,
   } = req.body;
+  const effectiveIsVvip = Boolean(is_vvip || visitor_category === 'VVIP');
 
   try {
     await db.query('BEGIN');
@@ -337,7 +338,7 @@ function getHostInvitationPermissions(userType, userRole) {
       ? 'DELIVERY'
       : visitor_category === 'VENDOR' || visitor_category === 'CONTRACTOR'
       ? 'VENDOR'
-      : is_vvip 
+      : effectiveIsVvip 
       ? 'VVIP' 
       : 'PASS';
     const randomNum = Math.floor(1000 + Math.random() * 9000);
@@ -368,7 +369,7 @@ function getHostInvitationPermissions(userType, userRole) {
         visit_type || (isSpotOrWalkin ? 'TOUR' : 'HOME'),
         stay_required || false,
         false,
-        priority || (is_vvip ? 'P1' : 'P3'),
+        priority || (effectiveIsVvip ? 'P1' : 'P3'),
         initialStatus,
         passCode,
         validFromTime,
@@ -379,7 +380,7 @@ function getHostInvitationPermissions(userType, userRole) {
         boysCount,
         girlsCount,
         totalCount,
-        is_vvip || false,
+        effectiveIsVvip,
         relationshipToResident,
       ]
     );
@@ -388,7 +389,7 @@ function getHostInvitationPermissions(userType, userRole) {
 
     // If initialStatus is APPROVED (e.g. walk-in registered by Supervisor or VIP Host), generate QR Code immediately
     if (initialStatus === 'APPROVED') {
-      const qrData = JSON.stringify({ passCode, regId: nextRegId, isVvip: is_vvip || false });
+      const qrData = JSON.stringify({ passCode, regId: nextRegId, isVvip: effectiveIsVvip });
       const qrCodeUrl = await QRCode.toDataURL(qrData);
       const approverName = req.user?.name || (isSpotOrWalkin ? 'Guard Supervisor' : 'Direct Host Approval');
       const approverRole = req.user?.role || (isSpotOrWalkin ? 'SUPERVISOR' : 'HOST');
@@ -462,7 +463,7 @@ function getHostInvitationPermissions(userType, userRole) {
         .catch((e) => console.error('Failed to fetch host email for L1 notification:', e));
     }
 
-    if (is_vvip) {
+    if (effectiveIsVvip) {
       broadcastSyncEvent('VVIP_ALERT', {
         message: `High Priority VVIP Registration Created: ${full_name}`,
         registration,
@@ -989,6 +990,10 @@ async function updateRegistration(req, res) {
       }
     }
 
+    const effectiveIsVvip = is_vvip !== undefined
+      ? Boolean(is_vvip || visitor_category === 'VVIP')
+      : (visitor_category ? visitor_category === 'VVIP' : reg.is_vvip);
+
     // Update Registration
     await db.query(
       `UPDATE registrations 
@@ -1010,8 +1015,8 @@ async function updateRegistration(req, res) {
         purpose,
         visit_type,
         stay_required,
-        priority || (is_vvip ? 'P1' : 'P3'),
-        is_vvip,
+        priority || (effectiveIsVvip ? 'P1' : 'P3'),
+        effectiveIsVvip,
         validFromTime,
         validUntilTime,
         menCount,
