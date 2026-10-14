@@ -3,10 +3,38 @@ const { broadcastSyncEvent } = require('../sockets/syncServer');
 const { logSystemAction } = require('../services/auditLogger');
 const { checkSystematicCheckouts } = require('./expiryService');
 
+// Indian Standard Time (IST, UTC+5:30) parsing and validation helpers
+function parseISTDateTime(input) {
+  if (!input) return null;
+  if (input instanceof Date) return input;
+  const str = String(input).trim();
+  if (str.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(str)) {
+    return new Date(str);
+  }
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(str)) {
+    const fullStr = str.length === 16 ? `${str}:00+05:30` : `${str}+05:30`;
+    return new Date(fullStr);
+  }
+  return new Date(str);
+}
+
+function getISTParts(date) {
+  const istOffsetMs = 5.5 * 60 * 60 * 1000;
+  const istDate = new Date(date.getTime() + istOffsetMs);
+  return {
+    year: istDate.getUTCFullYear(),
+    month: istDate.getUTCMonth() + 1,
+    day: istDate.getUTCDate(),
+    hours: istDate.getUTCHours(),
+    minutes: istDate.getUTCMinutes(),
+    dateStr: `${istDate.getUTCFullYear()}-${String(istDate.getUTCMonth() + 1).padStart(2, '0')}-${String(istDate.getUTCDate()).padStart(2, '0')}`,
+  };
+}
+
 function computeVisitorStatuses(reg, customNow) {
   const now = customNow || new Date();
-  const validFrom = reg.valid_from ? new Date(reg.valid_from) : new Date();
-  const validUntil = reg.valid_until ? new Date(reg.valid_until) : new Date(validFrom.getTime() + 12 * 3600 * 1000);
+  const validFrom = reg.valid_from ? parseISTDateTime(reg.valid_from) : new Date();
+  const validUntil = reg.valid_until ? parseISTDateTime(reg.valid_until) : new Date(validFrom.getTime() + 12 * 3600 * 1000);
   const departureTimePassed = now > validUntil;
 
   // Approval check: Pass must be approved, permanent, VVIP, or bypassed
@@ -15,9 +43,9 @@ function computeVisitorStatuses(reg, customNow) {
   const isPending = String(reg.status || '').startsWith('PENDING');
   const isRejected = reg.status === 'REJECTED';
 
-  // Point 5 & 6: Earliest arrival window is max(5:00 AM of SAT date, SAT - 8 hours), not exceeding SDT
-  const validFromDate = new Date(validFrom);
-  const day5AM = new Date(validFromDate.getFullYear(), validFromDate.getMonth(), validFromDate.getDate(), 5, 0, 0, 0);
+  // Point 5 & 6: Earliest arrival window is max(5:00 AM of SAT date in IST, SAT - 8 hours), not exceeding SDT
+  const fromParts = getISTParts(validFrom);
+  const day5AM = new Date(`${fromParts.dateStr}T05:00:00+05:30`);
   const raw8HoursPrior = new Date(validFrom.getTime() - 8 * 60 * 60 * 1000);
   const windowStart = raw8HoursPrior < day5AM ? day5AM : raw8HoursPrior;
   const isWithinArrivalWindow = now >= windowStart;
@@ -179,8 +207,11 @@ async function verifyGatePass(req, res) {
       ORDER BY 
         CASE 
           WHEN LOWER(sub.pass_code) = LOWER($1) OR LOWER(sub.pass_code) = LOWER('PASS-' || $1) THEN 1
-          WHEN sub.visitor_phone = $1 THEN 2
-          ELSE 3
+          WHEN CAST(sub.id AS TEXT) = $1 THEN 2
+          WHEN sub.visitor_phone = $1 THEN 3
+          WHEN LOWER(sub.visitor_name) = LOWER($1) THEN 4
+          WHEN sub.visitor_name ILIKE $1 || '%' THEN 5
+          ELSE 6
         END,
         sub.id DESC
       LIMIT 25`,

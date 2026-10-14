@@ -11,6 +11,34 @@ async function isL2Enabled() {
   return res.rows.length > 0 ? res.rows[0].value === 'true' : true;
 }
 
+// Indian Standard Time (IST, UTC+5:30) parsing and validation helpers
+function parseISTDateTime(input) {
+  if (!input) return null;
+  if (input instanceof Date) return input;
+  const str = String(input).trim();
+  if (str.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(str)) {
+    return new Date(str);
+  }
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(str)) {
+    const fullStr = str.length === 16 ? `${str}:00+05:30` : `${str}+05:30`;
+    return new Date(fullStr);
+  }
+  return new Date(str);
+}
+
+function getISTParts(date) {
+  const istOffsetMs = 5.5 * 60 * 60 * 1000;
+  const istDate = new Date(date.getTime() + istOffsetMs);
+  return {
+    year: istDate.getUTCFullYear(),
+    month: istDate.getUTCMonth() + 1,
+    day: istDate.getUTCDate(),
+    hours: istDate.getUTCHours(),
+    minutes: istDate.getUTCMinutes(),
+    dateStr: `${istDate.getUTCFullYear()}-${String(istDate.getUTCMonth() + 1).padStart(2, '0')}-${String(istDate.getUTCDate()).padStart(2, '0')}`,
+  };
+}
+
 // 1. Create Pre-Registration or Spot Registration
 async function createRegistration(req, res) {
   const {
@@ -69,10 +97,10 @@ async function createRegistration(req, res) {
       visitorId = newVisitor.rows[0].id;
     }
 
-    const validFromTime = valid_from ? new Date(valid_from) : new Date();
+    const validFromTime = valid_from ? parseISTDateTime(valid_from) : new Date();
     let validUntilTime;
     if (valid_until) {
-      validUntilTime = new Date(valid_until);
+      validUntilTime = parseISTDateTime(valid_until);
     } else {
       validUntilTime = new Date(validFromTime);
       validUntilTime.setDate(validUntilTime.getDate() + 1);
@@ -89,6 +117,19 @@ async function createRegistration(req, res) {
         });
       }
 
+      const fromParts = getISTParts(validFromTime);
+      const untilParts = getISTParts(validUntilTime);
+
+      // Issue #11: Same day departure
+      if (fromParts.dateStr !== untilParts.dateStr) {
+        await db.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Scheduled Departure Date must be on the same day as Scheduled Arrival Date.'
+        });
+      }
+
+      // Issue #10: Departure after Arrival
       if (validUntilTime <= validFromTime) {
         await db.query('ROLLBACK');
         return res.status(400).json({
@@ -97,12 +138,8 @@ async function createRegistration(req, res) {
         });
       }
 
-      const fromHour = validFromTime.getHours();
-      const fromMin = validFromTime.getMinutes();
-      const untilHour = validUntilTime.getHours();
-      const untilMin = validUntilTime.getMinutes();
-
-      if (fromHour < 5 || fromHour > 22 || (fromHour === 22 && fromMin > 0)) {
+      // Issue #2: Operating hours 5:00 AM - 10:00 PM in IST
+      if (fromParts.hours < 5 || fromParts.hours > 22 || (fromParts.hours === 22 && fromParts.minutes > 0)) {
         await db.query('ROLLBACK');
         return res.status(400).json({
           success: false,
@@ -110,7 +147,7 @@ async function createRegistration(req, res) {
         });
       }
 
-      if (untilHour < 5 || untilHour > 22 || (untilHour === 22 && untilMin > 0)) {
+      if (untilParts.hours < 5 || untilParts.hours > 22 || (untilParts.hours === 22 && untilParts.minutes > 0)) {
         await db.query('ROLLBACK');
         return res.status(400).json({
           success: false,
@@ -1327,10 +1364,10 @@ async function createPublicVisitorRegistration(req, res) {
     }
 
     const passCode = `PASS-${Math.floor(1000 + Math.random() * 9000)}`;
-    const validFromTime = valid_from ? new Date(valid_from) : new Date();
+    const validFromTime = valid_from ? parseISTDateTime(valid_from) : new Date();
     let validUntilTime;
     if (valid_until) {
-      validUntilTime = new Date(valid_until);
+      validUntilTime = parseISTDateTime(valid_until);
     } else {
       validUntilTime = new Date(validFromTime);
       validUntilTime.setDate(validUntilTime.getDate() + 1);
@@ -1346,6 +1383,19 @@ async function createPublicVisitorRegistration(req, res) {
       });
     }
 
+    const fromParts = getISTParts(validFromTime);
+    const untilParts = getISTParts(validUntilTime);
+
+    // Issue #11: Same day departure
+    if (fromParts.dateStr !== untilParts.dateStr) {
+      await db.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Scheduled Departure Date must be on the same day as Scheduled Arrival Date.'
+      });
+    }
+
+    // Issue #10: Departure after Arrival
     if (validUntilTime <= validFromTime) {
       await db.query('ROLLBACK');
       return res.status(400).json({
@@ -1354,12 +1404,8 @@ async function createPublicVisitorRegistration(req, res) {
       });
     }
 
-    const fromHour = validFromTime.getHours();
-    const fromMin = validFromTime.getMinutes();
-    const untilHour = validUntilTime.getHours();
-    const untilMin = validUntilTime.getMinutes();
-
-    if (fromHour < 5 || fromHour > 22 || (fromHour === 22 && fromMin > 0)) {
+    // Issue #2: Operating hours 5:00 AM - 10:00 PM in IST
+    if (fromParts.hours < 5 || fromParts.hours > 22 || (fromParts.hours === 22 && fromParts.minutes > 0)) {
       await db.query('ROLLBACK');
       return res.status(400).json({
         success: false,
@@ -1367,7 +1413,7 @@ async function createPublicVisitorRegistration(req, res) {
       });
     }
 
-    if (untilHour < 5 || untilHour > 22 || (untilHour === 22 && untilMin > 0)) {
+    if (untilParts.hours < 5 || untilParts.hours > 22 || (untilParts.hours === 22 && untilParts.minutes > 0)) {
       await db.query('ROLLBACK');
       return res.status(400).json({
         success: false,
@@ -1384,13 +1430,14 @@ async function createPublicVisitorRegistration(req, res) {
 
     const maxR = await db.query('SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM registrations');
     const nextRegId = parseInt(maxR.rows[0].next_id, 10);
+    const finalVisitType = req.body.visit_type || 'HOME';
 
     const regRes = await db.query(
       `INSERT INTO registrations 
        (id, visitor_id, host_id, purpose, registration_mode, registration_type, visit_type, priority, status, pass_code, valid_from, valid_until, adult_men_count, adult_women_count, children_count, person_count, host_notified_at, lifecycle_status, presence_status, boys_count, girls_count)
-       VALUES ($1, $2, $3, $4, $5, 'PRE_APPROVAL', 'HOME', 'P3', 'PENDING_L1', $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP, 'Yet to Arrive', 'currently_outside', $13, $14)
+       VALUES ($1, $2, $3, $4, $5, 'PRE_APPROVAL', $15, 'P3', 'PENDING_L1', $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP, 'Yet to Arrive', 'currently_outside', $13, $14)
        RETURNING *`,
-      [nextRegId, visitorId, hostNumericId, purpose || 'Visitor Self-Filled Form via Share Link', registration_mode || 'Single', passCode, validFromTime, validUntilTime, menCount, womenCount, kidsCount, totalCount, boys, girls]
+      [nextRegId, visitorId, hostNumericId, purpose || 'Visitor Self-Filled Form via Share Link', registration_mode || 'Single', passCode, validFromTime, validUntilTime, menCount, womenCount, kidsCount, totalCount, boys, girls, finalVisitType]
     );
 
     const registration = regRes.rows[0];
