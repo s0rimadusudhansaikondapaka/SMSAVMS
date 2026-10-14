@@ -364,7 +364,7 @@ function getHostInvitationPermissions(userType, userRole) {
         visitorId,
         host_id || req.user?.id || null,
         familyMemberRecordId,
-        purpose || (isSpotOrWalkin ? 'Spot / Walk-in Gate Visit' : 'Family Visit / Ashram Stay'),
+        purpose || (isSpotOrWalkin ? 'Spot / Walk-in Gate Visit' : (isVipOrHodHost ? 'VIP Ashram Visit' : 'Family Visit / Ashram Stay')),
         regType,
         visit_type || (isSpotOrWalkin ? 'TOUR' : 'HOME'),
         stay_required || false,
