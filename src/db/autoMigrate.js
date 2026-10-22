@@ -280,7 +280,7 @@ async function runAutoMigrations() {
       { name: 'System Administrator (Super Admin)', email: 'admin@ashram.org', phone: '+91 9876543216', role: 'ADMIN', user_type: 'ADMIN', residency_status: 'RESIDENT', flat_info: 'IT & Systems' },
     ];
 
-    const defaultPasswordHash = '$2b$10$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeg6Lruj3vjPGga31lW';
+    const defaultPasswordHash = '$2a$10$gFgbT0pMR4Ir6R3m83J4V.SJlES3v2rpWxwP06EKdhS9gHdpza6X.';
 
     for (const u of sampleHostUsers) {
       try {
