@@ -5,14 +5,18 @@ require('dotenv').config();
 let pool = null;
 let isMemoryMode = false;
 
-const NEON_DEFAULT_URL = 'postgresql://neondb_owner:npg_tyR3SVM0vBzc@ep-spring-field-azdk97ad.c-3.ap-southeast-1.aws.neon.tech/neondb?sslmode=require';
+const NEON_DEFAULT_URL = process.env.UAT_CONNECTION_STRING || process.env.DATABASE_URL || '';
 
 // 1. Connection string configuration per environment
 const env = (process.env.APP_ENV || process.env.NODE_ENV || 'local').toLowerCase();
 const isHosted = !!(process.env.RENDER || process.env.NODE_ENV === 'production' || process.env.VERCEL || process.env.HEROKU);
 
+const defaultLocalConn = (process.env.DB_HOST || process.env.DB_PASSWORD)
+  ? `postgresql://${process.env.DB_USER || 'postgres'}:${process.env.DB_PASSWORD || 'postgres'}@${process.env.DB_HOST || 'localhost'}:${process.env.DB_PORT || 5432}/${process.env.DB_NAME || 'vm'}`
+  : 'postgresql://postgres:postgres@localhost:5432/vm';
+
 const connectionStrings = {
-  local: process.env.LOCAL_CONNECTION_STRING || process.env.LOCAL_DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/vm',
+  local: process.env.LOCAL_CONNECTION_STRING || process.env.LOCAL_DATABASE_URL || defaultLocalConn,
   uat: process.env.UAT_CONNECTION_STRING || process.env.UAT_DATABASE_URL || NEON_DEFAULT_URL,
   beta: process.env.BETA_CONNECTION_STRING || process.env.BETA_DATABASE_URL || NEON_DEFAULT_URL,
   production: process.env.PROD_CONNECTION_STRING || process.env.PRODUCTION_CONNECTION_STRING || process.env.PROD_DATABASE_URL || process.env.DATABASE_URL || NEON_DEFAULT_URL,

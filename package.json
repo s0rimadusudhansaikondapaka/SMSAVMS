@@ -7,7 +7,8 @@
     "start": "node src/app.js",
     "dev": "node --watch src/app.js",
     "seed": "node src/db/seedRunner.js",
-    "sync-uat-db": "node src/db/syncUatToLocal.js"
+    "sync-uat-db": "node src/db/syncUatToLocal.js",
+    "hash-db-password": "node scripts/saveSha256DbPassword.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

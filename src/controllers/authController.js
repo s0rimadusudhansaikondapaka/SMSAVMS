@@ -41,13 +41,11 @@ async function login(req, res) {
     }
 
     const user = result.rows[0];
-    let isMatch = password === 'password123' || password === user.password_hash;
-    if (!isMatch) {
-      try {
-        isMatch = await bcrypt.compare(password, user.password_hash);
-      } catch (e) {
-        isMatch = false;
-      }
+    let isMatch = false;
+    try {
+      isMatch = await bcrypt.compare(password, user.password_hash);
+    } catch (e) {
+      isMatch = false;
     }
 
     if (!isMatch) {
@@ -168,13 +166,18 @@ async function sendOtp(req, res) {
     // In production, send OTP via WhatsApp/SMS here
     console.log(`[OTP Service] Mock OTP for ${phone}: ${otpCode}`);
 
-    res.json({
+    const responsePayload = {
       success: true,
       message: 'OTP sent successfully.',
       user_exists: userExists,
-      // DEV ONLY: exposing OTP for testing
-      dev_otp: otpCode,
-    });
+    };
+
+    // Only expose dev_otp in strict local development mode, never in production or hosted environments
+    if (process.env.APP_ENV === 'local' && process.env.NODE_ENV !== 'production') {
+      responsePayload.dev_otp = otpCode;
+    }
+
+    res.json(responsePayload);
   } catch (err) {
     console.error('Send OTP error:', err);
     res.status(500).json({ success: false, message: 'Failed to send OTP.' });

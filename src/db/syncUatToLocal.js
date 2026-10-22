@@ -3,7 +3,11 @@ const fs = require('fs');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '..', '.env') });
 
-const uatConnectionString = process.env.UAT_CONNECTION_STRING || 'postgresql://neondb_owner:npg_tyR3SVM0vBzc@ep-spring-field-azdk97ad.c-3.ap-southeast-1.aws.neon.tech/neondb?sslmode=require';
+const uatConnectionString = process.env.UAT_CONNECTION_STRING || process.env.DATABASE_URL;
+if (!uatConnectionString) {
+  console.error('[UAT DB Sync Error] UAT_CONNECTION_STRING is not set in environment or .env file.');
+  process.exit(1);
+}
 const localConnectionString = process.env.LOCAL_CONNECTION_STRING || 'postgresql://postgres:postgres@localhost:5432/vm';
 
 const uatPool = new Pool({ connectionString: uatConnectionString, ssl: { rejectUnauthorized: false } });
