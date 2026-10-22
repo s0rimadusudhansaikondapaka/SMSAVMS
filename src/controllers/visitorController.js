@@ -664,62 +664,67 @@ async function updateApproval(req, res) {
           newStatus = 'PENDING_ACCOMMODATION';
       } else if (l2Enabled) {
         const vType = (visit_type || reg.visit_type || 'HOME').toUpperCase();
-        
-        let isHostResident = false;
-        let isHostEmployee = false;
-        let hostDeptId = null;
-        if (reg.host_id) {
-          const hostRes = await db.query('SELECT role, residency_status, department_id FROM users WHERE id = $1', [reg.host_id]);
-          if (hostRes.rows.length > 0) {
-            const h = hostRes.rows[0];
-            isHostResident = h.role === 'RESIDENT' || h.role === 'RESIDENT_EMPLOYEE' || h.residency_status === 'RESIDENT';
-            isHostEmployee = h.role === 'EMPLOYEE' || h.role === 'RESIDENT_EMPLOYEE' || h.role === 'HOD';
-            hostDeptId = h.department_id;
-          }
-        }
+        const purposeStr = (req.body.purpose || reg.purpose || '').toLowerCase();
+        const isAshramReason = vType === 'ASHRAM' || purposeStr.includes('ashram') || vType === 'BHAJAN' || vType === 'TOUR';
 
-        // Determine host category key: 'BOTH', 'EMPLOYEE', or 'RESIDENT'
-        const hostCategoryKey = (isHostResident && isHostEmployee) ? 'BOTH' : isHostEmployee ? 'EMPLOYEE' : 'RESIDENT';
-        
-        // Determine visit type category key: 'EMPLOYEE_OFFICIAL_VISIT', 'RESIDENT_VISIT', or 'ASHRAM_VISIT'
-        let visitTypeCategoryKey = 'RESIDENT_VISIT';
-        if (vType === 'OFFICE' || vType === 'OFFICIAL') {
-          visitTypeCategoryKey = 'EMPLOYEE_OFFICIAL_VISIT';
-        } else if (vType === 'ASHRAM' || vType === 'BHAJAN' || vType === 'TOUR') {
-          visitTypeCategoryKey = 'ASHRAM_VISIT';
-        }
-
-        // Query active L2 Matrix rule configured by Super Admin
-        const ruleRes = await db.query(
-          `SELECT approver_type FROM l2_approval_matrix_rules WHERE host_category = $1 AND visit_type_category = $2 AND is_enabled = true`,
-          [hostCategoryKey, visitTypeCategoryKey]
-        );
-
-        let approverType = 'DEPARTMENT_PRO';
-        if (ruleRes.rows.length > 0) {
-          approverType = ruleRes.rows[0].approver_type;
-        } else {
-          // Fallback default matrix
-          approverType = (visitTypeCategoryKey === 'EMPLOYEE_OFFICIAL_VISIT') ? 'SAME_DEPARTMENT_HOD' : 'DEPARTMENT_PRO';
-        }
-
-        // Evaluate whether current approver satisfies rule
-        if (approverType === 'SAME_DEPARTMENT_HOD') {
-          // Requires HOD role of host's same department
-          if (req.user.role === 'HOD' && (hostDeptId ? req.user.department_id === hostDeptId : true)) {
-            newStatus = 'APPROVED';
-          } else {
-            newStatus = 'PENDING_L2';
-          }
-        } else if (approverType === 'DEPARTMENT_PRO') {
-          // Requires PRO department
-          if (req.user.role === 'PRO' || req.user.department_name === 'PRO') {
-            newStatus = 'APPROVED';
-          } else {
-            newStatus = 'PENDING_L2';
-          }
-        } else {
+        if (isAshramReason) {
+          // Ashram visits do not require Department HOD (L2) approval - direct approve
           newStatus = 'APPROVED';
+        } else {
+          let isHostResident = false;
+          let isHostEmployee = false;
+          let hostDeptId = null;
+          if (reg.host_id) {
+            const hostRes = await db.query('SELECT role, residency_status, department_id FROM users WHERE id = $1', [reg.host_id]);
+            if (hostRes.rows.length > 0) {
+              const h = hostRes.rows[0];
+              isHostResident = h.role === 'RESIDENT' || h.role === 'RESIDENT_EMPLOYEE' || h.residency_status === 'RESIDENT';
+              isHostEmployee = h.role === 'EMPLOYEE' || h.role === 'RESIDENT_EMPLOYEE' || h.role === 'HOD';
+              hostDeptId = h.department_id;
+            }
+          }
+
+          // Determine host category key: 'BOTH', 'EMPLOYEE', or 'RESIDENT'
+          const hostCategoryKey = (isHostResident && isHostEmployee) ? 'BOTH' : isHostEmployee ? 'EMPLOYEE' : 'RESIDENT';
+          
+          // Determine visit type category key: 'EMPLOYEE_OFFICIAL_VISIT', 'RESIDENT_VISIT', or 'ASHRAM_VISIT'
+          let visitTypeCategoryKey = 'RESIDENT_VISIT';
+          if (vType === 'OFFICE' || vType === 'OFFICIAL') {
+            visitTypeCategoryKey = 'EMPLOYEE_OFFICIAL_VISIT';
+          }
+
+          // Query active L2 Matrix rule configured by Super Admin
+          const ruleRes = await db.query(
+            `SELECT approver_type FROM l2_approval_matrix_rules WHERE host_category = $1 AND visit_type_category = $2 AND is_enabled = true`,
+            [hostCategoryKey, visitTypeCategoryKey]
+          );
+
+          let approverType = 'DEPARTMENT_PRO';
+          if (ruleRes.rows.length > 0) {
+            approverType = ruleRes.rows[0].approver_type;
+          } else {
+            // Fallback default matrix
+            approverType = (visitTypeCategoryKey === 'EMPLOYEE_OFFICIAL_VISIT') ? 'SAME_DEPARTMENT_HOD' : 'DEPARTMENT_PRO';
+          }
+
+          // Evaluate whether current approver satisfies rule
+          if (approverType === 'SAME_DEPARTMENT_HOD') {
+            // Requires HOD role of host's same department
+            if (req.user.role === 'HOD' && (hostDeptId ? req.user.department_id === hostDeptId : true)) {
+              newStatus = 'APPROVED';
+            } else {
+              newStatus = 'PENDING_L2';
+            }
+          } else if (approverType === 'DEPARTMENT_PRO') {
+            // Requires PRO department
+            if (req.user.role === 'PRO' || req.user.department_name === 'PRO') {
+              newStatus = 'APPROVED';
+            } else {
+              newStatus = 'PENDING_L2';
+            }
+          } else {
+            newStatus = 'APPROVED';
+          }
         }
       } else {
         newStatus = 'APPROVED';
@@ -1193,7 +1198,7 @@ async function resolveHostUser(identifier) {
     }
   }
 
-  return allUsers.rows[0] || null;
+  return null;
 }
 
 // Ensure invite_tokens table exists
@@ -1238,8 +1243,17 @@ async function generateInviteToken(req, res) {
 async function getPublicHostInfo(req, res) {
   const { host_id } = req.params;
   try {
-    // Check if single-use token
-    if (typeof host_id === 'string' && host_id.startsWith('inv_')) {
+    // Check if token or altered token (starts with 'inv' or contains 'inv_')
+    if (typeof host_id === 'string' && (host_id.startsWith('inv') || host_id.includes('inv_'))) {
+      const UUID_REGEX = /^inv_[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      if (!UUID_REGEX.test(host_id)) {
+        return res.status(400).json({
+          success: false,
+          is_valid: false,
+          message: 'Invalid invitation token format. The invitation link has been altered or is malformed.'
+        });
+      }
+
       const tokenRes = await db.query(
         `SELECT it.*, u.name, u.residency_status, u.role, COALESCE(u.user_type, u.role) as user_type 
          FROM invite_tokens it 
@@ -1248,26 +1262,35 @@ async function getPublicHostInfo(req, res) {
         [host_id]
       );
       if (tokenRes.rows.length === 0) {
-        // Fallback: If token row was cleaned or in-memory server rebooted, safely return default host info
-        const defaultHost = await resolveHostUser('1');
-        return res.json({
-          success: true,
-          is_used: false,
-          host: defaultHost || { id: 1, name: 'Ashram Host', residency_status: 'Resident', role: 'HOST', user_type: 'RESIDENT' }
+        return res.status(404).json({
+          success: false,
+          is_valid: false,
+          message: 'Invitation link not found or does not exist. Only official generated invite URLs are authorized.'
         });
       }
       const tok = tokenRes.rows[0];
       const isExpired = tok.created_at && (new Date() - new Date(tok.created_at) > 4 * 24 * 60 * 60 * 1000);
-      if (tok.is_used || isExpired) {
-        return res.json({
-          success: true,
+      if (tok.is_used) {
+        return res.status(400).json({
+          success: false,
+          is_valid: false,
           is_used: true,
-          message: isExpired ? 'This invitation link has expired (4-day validity limit passed).' : 'This invitation link has already been used to submit a visitor registration and is now expired.',
+          message: 'This single-use invitation link has already been used to submit a visitor registration and is now expired.',
+          host: { id: tok.host_id, name: tok.name, residency_status: tok.residency_status, role: tok.role, user_type: tok.user_type }
+        });
+      }
+      if (isExpired) {
+        return res.status(400).json({
+          success: false,
+          is_valid: false,
+          is_expired: true,
+          message: 'This invitation link has expired (4-day validity limit passed).',
           host: { id: tok.host_id, name: tok.name, residency_status: tok.residency_status, role: tok.role, user_type: tok.user_type }
         });
       }
       return res.json({
         success: true,
+        is_valid: true,
         is_used: false,
         host: { id: tok.host_id, name: tok.name, residency_status: tok.residency_status, role: tok.role, user_type: tok.user_type }
       });
@@ -1275,14 +1298,13 @@ async function getPublicHostInfo(req, res) {
 
     const host = await resolveHostUser(host_id);
     if (!host) {
-      const defaultHost = await resolveHostUser('1');
-      return res.json({
-        success: true,
-        is_used: false,
-        host: defaultHost || { id: 1, name: 'Ashram Host', residency_status: 'Resident', role: 'HOST', user_type: 'RESIDENT' }
+      return res.status(404).json({
+        success: false,
+        is_valid: false,
+        message: 'Invalid or expired invitation link. Host not found.'
       });
     }
-    res.json({ success: true, is_used: false, host });
+    res.json({ success: true, is_valid: true, is_used: false, host });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Failed to fetch host details.' });
   }
@@ -1311,27 +1333,61 @@ async function createPublicVisitorRegistration(req, res) {
     vehicles,
   } = req.body;
 
-  const activeToken = token || (typeof host_id === 'string' && host_id.startsWith('inv_') ? host_id : null);
+  const activeToken = token || (typeof host_id === 'string' && (host_id.startsWith('inv') || host_id.includes('inv_')) ? host_id : null);
 
   if (!host_id || !full_name || !phone) {
     return res.status(400).json({ success: false, message: 'Host ID/GUID, Full Name, and Phone are required.' });
   }
 
   try {
+    let hostNumericId = 1;
+    let hostUser = null;
+
     if (activeToken) {
-      try {
-        const checkTok = await db.query('SELECT is_used FROM invite_tokens WHERE token = $1', [activeToken]);
-        if (checkTok.rows.length > 0 && checkTok.rows[0].is_used) {
-          return res.status(400).json({
-            success: false,
-            message: 'This invitation link has already been submitted. Re-submission is not allowed.'
-          });
-        }
-      } catch (tokErr) {}
+      const UUID_REGEX = /^inv_[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      if (!UUID_REGEX.test(activeToken)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid invitation token format. Altered or malformed links cannot be submitted.'
+        });
+      }
+
+      const checkTok = await db.query('SELECT * FROM invite_tokens WHERE token = $1', [activeToken]);
+      if (checkTok.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Invitation link does not exist. Only official generated invite URLs are authorized.'
+        });
+      }
+      const tok = checkTok.rows[0];
+      if (tok.is_used) {
+        return res.status(400).json({
+          success: false,
+          message: 'This single-use invitation link has already been submitted. Re-submission is not allowed.'
+        });
+      }
+      const isExpired = tok.created_at && (new Date() - new Date(tok.created_at) > 4 * 24 * 60 * 60 * 1000);
+      if (isExpired) {
+        return res.status(400).json({
+          success: false,
+          message: 'This invitation link has expired (4-day validity limit passed).'
+        });
+      }
+
+      hostNumericId = tok.host_id;
+      const uRes = await db.query('SELECT id, name, residency_status, role, COALESCE(user_type, role) as user_type, email FROM users WHERE id = $1', [hostNumericId]);
+      hostUser = uRes.rows[0] || null;
+    } else {
+      hostUser = await resolveHostUser(host_id);
+      if (!hostUser) {
+        return res.status(400).json({
+          success: false,
+          message: 'Valid Host or authorized Invitation token is required.'
+        });
+      }
+      hostNumericId = hostUser.id;
     }
 
-    const hostUser = await resolveHostUser(activeToken || host_id);
-    const hostNumericId = hostUser ? hostUser.id : 1;
     const isHostVipOnly = hostUser && (hostUser.user_type === 'VIP_HOST' || hostUser.role === 'VIP_HOST');
 
     const rawCategory = (req.body.visitor_category || req.body.category || 'GENERAL').toUpperCase();
@@ -1596,6 +1652,7 @@ async function getPublicPassDetails(req, res) {
     }
 
     const reg = result.rows[0];
+    const isExpired = !reg.is_permanent_pass && reg.valid_until && new Date() > new Date(reg.valid_until);
     let qrCodeUrl = reg.qr_code_url;
     if (!qrCodeUrl) {
       const qrData = JSON.stringify({ passCode: reg.pass_code, regId: reg.id, isVvip: reg.is_vvip });
@@ -1611,11 +1668,14 @@ async function getPublicPassDetails(req, res) {
         visitor_phone: reg.visitor_phone,
         visitor_photo: reg.visitor_photo,
         host_name: reg.host_name,
-        status: reg.status,
+        status: isExpired ? (reg.status === 'INSIDE_CAMPUS' ? reg.status : 'EXPIRED') : reg.status,
         qr_code_url: qrCodeUrl,
         valid_from: reg.valid_from,
         valid_until: reg.valid_until,
         is_permanent_pass: reg.is_permanent_pass,
+        is_expired: isExpired,
+        departure_time_passed: isExpired,
+        is_valid: !isExpired && (reg.status === 'APPROVED' || reg.status === 'INSIDE_CAMPUS'),
         person_count: reg.person_count,
         registration_mode: reg.registration_mode,
       }

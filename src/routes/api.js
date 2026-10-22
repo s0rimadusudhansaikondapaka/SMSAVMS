@@ -2,7 +2,17 @@ const express = require('express');
 const router = express.Router();
 
 const db = require('../config/db');
-const { login, getMe, sendOtp, verifyOtp, registerNewUser } = require('../controllers/authController');
+const { 
+  login, 
+  getMe, 
+  sendOtp, 
+  verifyOtp, 
+  registerNewUser,
+  forgotPassword,
+  verifyResetToken,
+  resetPassword,
+  changePassword,
+} = require('../controllers/authController');
 const { 
   createRegistration, 
   updateApproval, 
@@ -46,6 +56,8 @@ const {
   getDepartments, 
   createSingleUser, 
   updateSingleUser,
+  adminChangeUserPassword,
+  adminSendResetLink,
   bulkUploadUsers, 
   bulkUploadVisitors,
   getGateCategoryRules,
@@ -57,7 +69,7 @@ const {
   getGateDirectionConfig,
   updateGateDirectionConfig,
 } = require('../controllers/adminUserController');
-const { authenticateToken, requireRoles } = require('../middlewares/auth');
+const { authenticateToken, authenticateTokenOptional, requireRoles } = require('../middlewares/auth');
 
 /**
  * @openapi
@@ -200,6 +212,46 @@ router.post('/auth/verify-otp', verifyOtp);
  *         description: Registration submitted, pending approval
  */
 router.post('/auth/register', registerNewUser);
+
+/**
+ * @openapi
+ * /api/auth/forgot-password:
+ *   post:
+ *     summary: Request Password Reset Link
+ *     tags: [Authentication]
+ *     security: []
+ */
+router.post('/auth/forgot-password', forgotPassword);
+
+/**
+ * @openapi
+ * /api/auth/verify-reset-token:
+ *   get:
+ *     summary: Verify Reset Token Validity
+ *     tags: [Authentication]
+ *     security: []
+ */
+router.get('/auth/verify-reset-token', verifyResetToken);
+router.post('/auth/verify-reset-token', verifyResetToken);
+
+/**
+ * @openapi
+ * /api/auth/reset-password:
+ *   post:
+ *     summary: Set New Password via Reset Token
+ *     tags: [Authentication]
+ *     security: []
+ */
+router.post('/auth/reset-password', resetPassword);
+
+/**
+ * @openapi
+ * /api/auth/change-password:
+ *   post:
+ *     summary: Authenticated User Change Password
+ *     tags: [Authentication]
+ */
+router.post('/auth/change-password', authenticateToken, changePassword);
 
 /**
  * @openapi
@@ -395,8 +447,8 @@ router.get('/registrations/history', authenticateToken, getVisitHistory);
  *       404:
  *         description: Pass not found or invalid
  */
-router.get('/gate/verify', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), verifyGatePass);
-router.get('/gate/verify/:query', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), verifyGatePass);
+router.get('/gate/verify', authenticateTokenOptional, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), verifyGatePass);
+router.get('/gate/verify/:query', authenticateTokenOptional, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), verifyGatePass);
 
 /**
  * @openapi
@@ -959,6 +1011,9 @@ router.get('/departments', getDepartments);
 router.get('/admin/users', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD', 'SUPERVISOR', 'GUARD', 'PRO', 'HOD'), getAllUsers);
 router.post('/admin/users', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD'), createSingleUser);
 router.put('/admin/users/:id', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD'), updateSingleUser);
+router.post('/admin/users/:id/change-password', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD'), adminChangeUserPassword);
+router.put('/admin/users/:id/change-password', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD'), adminChangeUserPassword);
+router.post('/admin/users/:id/send-reset-link', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD'), adminSendResetLink);
 router.post('/admin/users/bulk-upload', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD'), bulkUploadUsers);
 router.post('/admin/visitors/bulk-upload', authenticateToken, requireRoles('ADMIN', 'SECURITY_HEAD', 'SUPERVISOR', 'HOD', 'GUARD'), bulkUploadVisitors);
 

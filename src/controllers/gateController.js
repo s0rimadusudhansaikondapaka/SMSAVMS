@@ -35,10 +35,10 @@ function computeVisitorStatuses(reg, customNow) {
   const now = customNow || new Date();
   const validFrom = reg.valid_from ? parseISTDateTime(reg.valid_from) : new Date();
   const validUntil = reg.valid_until ? parseISTDateTime(reg.valid_until) : new Date(validFrom.getTime() + 12 * 3600 * 1000);
-  const departureTimePassed = now > validUntil;
+  const isPerm = isPermanentPass(reg);
+  const departureTimePassed = !isPerm && reg.valid_until && (now > validUntil);
 
   // Approval check: Pass must be approved, permanent, VVIP, or bypassed
-  const isPerm = isPermanentPass(reg);
   const isApproved = isPerm || !!reg.is_vvip || !!reg.bypassed_by_admin || reg.status === 'APPROVED' || reg.status === 'INSIDE_CAMPUS' || reg.status === 'CHECKED_OUT';
   const isPending = String(reg.status || '').startsWith('PENDING');
   const isRejected = reg.status === 'REJECTED';
@@ -49,7 +49,7 @@ function computeVisitorStatuses(reg, customNow) {
   const raw8HoursPrior = new Date(validFrom.getTime() - 8 * 60 * 60 * 1000);
   const windowStart = raw8HoursPrior < day5AM ? day5AM : raw8HoursPrior;
   const isWithinArrivalWindow = now >= windowStart;
-  const arrivalStatus = !isApproved ? 'NOT_APPROVED' : !isWithinArrivalWindow ? 'TOO_EARLY' : departureTimePassed ? 'ARRIVAL_EXPIRED' : 'ACTIVE_WINDOW';
+  const arrivalStatus = !isApproved ? 'NOT_APPROVED' : departureTimePassed ? 'EXPIRED' : !isWithinArrivalWindow ? 'TOO_EARLY' : 'ACTIVE_WINDOW';
 
   // Track if visitor has entered campus at least once
   const hasEnteredOnce = !!(reg.first_entry_at || reg.status === 'INSIDE_CAMPUS' || reg.status === 'CHECKED_OUT' || reg.lifecycle_status === 'CHECKED-IN' || reg.lifecycle_status === 'CHECKED-OUT');
@@ -120,6 +120,8 @@ function computeVisitorStatuses(reg, customNow) {
     lifecycle_status: lifecycleStatus,
     presence_status: presenceStatus,
     departure_time_passed: departureTimePassed,
+    is_expired: departureTimePassed,
+    is_valid: isApproved && !departureTimePassed,
     is_within_arrival_window: isWithinArrivalWindow,
     earliest_allowed_entry: windowStart.toISOString(),
     arrival_status: arrivalStatus,
@@ -250,11 +252,16 @@ async function verifyGatePass(req, res) {
         ? 'Permanent Multi-Entry Passcard - Valid 24/7 for unlimited entry & exit'
         : `Pass valid for entry (Allowed from ${graceHours}h before arrival until ${graceHours}h after departure)`;
 
+      const departureTimePassed = !isPerm && reg.valid_until && (now > validUntil);
+
       if (!isApproved) {
         arrivalStatus = 'NOT_APPROVED';
         arrivalMessage = `⛔ Entry Blocked: Visitor pass is not yet approved. Approval is pending (${reg.status === 'PENDING_L1' ? 'Awaiting Host (L1) Approval' : reg.status === 'PENDING_L2' ? 'Awaiting L2 Approval' : reg.status === 'PENDING_SUPERVISOR' ? 'Awaiting Guard Supervisor Approval' : reg.status}).`;
       } else if (!isPerm) {
-        if (now < windowStart) {
+        if (departureTimePassed) {
+          arrivalStatus = 'EXPIRED';
+          arrivalMessage = `⛔ Expired QR Code / Invalid Pass: Scheduled Departure Time (SDT: ${validUntil.toLocaleString()}) has passed.`;
+        } else if (now < windowStart) {
           arrivalStatus = 'TOO_EARLY';
           arrivalMessage = `⛔ Pass Arrival Window Not Open. Earliest entry allowed: ${windowStart.toLocaleString()}`;
         } else if (now > windowEnd && reg.status !== 'INSIDE_CAMPUS' && reg.status !== 'CHECKED_OUT') {
