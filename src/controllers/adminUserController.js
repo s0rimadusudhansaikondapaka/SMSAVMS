@@ -148,6 +148,13 @@ async function bulkUploadUsers(req, res) {
 
   const defaultPasswordHash = await bcrypt.hash('password123', 10);
 
+  const hostUserTypes = [
+    'RESIDENT', 'EMPLOYEE', 'VIP_HOST', 'PRO', 'RESIDENT_EMPLOYEE', 
+    'RESIDENT_VIP_HOST', 'EMPLOYEE_VIP_HOST', 'RESIDENT_EMPLOYEE_VIP_HOST',
+    'VOLUNTEER', 'STUDENT', 'GUEST'
+  ];
+  const systemRoles = ['GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN', 'HOD', 'PRO'];
+
   for (let i = 0; i < users.length; i++) {
     const row = users[i];
     const rowNum = i + 1;
@@ -155,10 +162,43 @@ async function bulkUploadUsers(req, res) {
     const name = row.name || row.Name || row['Full Name'];
     const email = row.email || row.Email || row['Email Address'];
     const phone = row.phone || row.Phone || row['Phone Number'] || row['Mobile'];
-    const role = (row.role || row.Role || 'RESIDENT').toUpperCase();
-    const residency_status = (row.residency_status || row.Residency || (role === 'RESIDENT' ? 'RESIDENT' : 'NON_RESIDENT')).toUpperCase();
+    const rawRole = (row.role || row.Role || '').toString().toUpperCase().trim();
+    const rawUserType = (row.user_type || row['User Type'] || row.UserType || row['User_Type'] || '').toString().toUpperCase().trim();
+
+    let finalRole = 'HOST';
+    let finalUserType = 'RESIDENT';
+
+    if (rawUserType) {
+      finalUserType = rawUserType;
+      if (systemRoles.includes(rawUserType)) {
+        finalRole = rawUserType;
+      } else if (rawRole && systemRoles.includes(rawRole)) {
+        finalRole = rawRole;
+      } else {
+        finalRole = 'HOST';
+      }
+    } else if (rawRole) {
+      if (hostUserTypes.includes(rawRole)) {
+        finalUserType = rawRole;
+        finalRole = 'HOST';
+      } else if (systemRoles.includes(rawRole)) {
+        finalRole = rawRole;
+        finalUserType = rawRole;
+      } else {
+        finalRole = rawRole;
+        finalUserType = rawRole;
+      }
+    }
+
+    const residency_status = (
+      row.residency_status || row.Residency || 
+      (['EMPLOYEE', 'EMPLOYEE_VIP_HOST', 'GUARD', 'VOLUNTEER'].includes(finalUserType) ? 'NON_RESIDENT' : 'RESIDENT')
+    ).toString().toUpperCase().trim();
+
+    const flatInfo = row.flat_info || row['Flat Info'] || row['Flat / Office Info'] || row['Flat/Office Info'] || row.Address || '';
     const deptName = row.department || row.Department || row['Department Name'] || '';
     const password = row.password || row.Password || 'password123';
+    const userGuid = `USR-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
 
     if (!name || !email || !phone) {
       failedCount++;
@@ -182,12 +222,24 @@ async function bulkUploadUsers(req, res) {
 
       const passHash = password === 'password123' ? defaultPasswordHash : await bcrypt.hash(password, 10);
 
-      const ins = await db.query(
-        `INSERT INTO users (name, email, phone, role, residency_status, department_id, password_hash, registration_status)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACTIVE')
-         RETURNING id, name, email, phone, role`,
-        [name, email, phone, role, residency_status, deptId, passHash]
-      );
+      let ins;
+      try {
+        ins = await db.query(
+          `INSERT INTO users (guid, name, email, phone, role, user_type, residency_status, department_id, flat_info, password_hash, registration_status)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'ACTIVE')
+           RETURNING id, guid, name, email, phone, role, user_type, residency_status`,
+          [userGuid, name, email, phone, finalRole, finalUserType, residency_status, deptId, flatInfo, passHash]
+        );
+      } catch (insertErr) {
+        // Fallback for older schemas lacking user_type or flat_info
+        ins = await db.query(
+          `INSERT INTO users (name, email, phone, role, residency_status, department_id, password_hash, registration_status)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACTIVE')
+           RETURNING id, name, email, phone, role, residency_status`,
+          [name, email, phone, finalRole, residency_status, deptId, passHash]
+        );
+        if (ins.rows[0]) ins.rows[0].user_type = finalUserType;
+      }
 
       createdCount++;
       createdUsers.push(ins.rows[0]);
