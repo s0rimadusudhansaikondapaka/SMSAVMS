@@ -104,6 +104,7 @@ const { authenticateToken, requireRoles } = require('../middlewares/auth');
  *         description: Invalid credentials
  */
 router.post('/auth/login', login);
+router.post('/auth/supervisor/login', login);
 
 /**
  * @openapi
@@ -703,6 +704,44 @@ router.post('/supervisor/l2-toggle', authenticateToken, requireRoles('SECURITY_H
  *         description: Resident absence registered
  */
 router.post('/supervisor/resident-absence', authenticateToken, registerResidentAbsence);
+
+// Supervisor Mobile App Compatibility Endpoints
+router.get('/supervisor/spot-queue', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), getSpotRegistrationsQueue);
+router.post('/supervisor/spot-queue/:id/action', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), (req, res) => {
+  req.body.registration_id = req.params.id;
+  req.body.action = req.body.status || 'APPROVE';
+  req.body.remarks = req.body.reason || req.body.remarks || 'Supervisor action';
+  return supervisorOverride(req, res);
+});
+router.post('/supervisor/spot-queue/:id/approve', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), (req, res) => {
+  req.body.registration_id = req.params.id;
+  req.body.action = 'APPROVE';
+  req.body.remarks = req.body.notes || req.body.remarks || 'Supervisor approved';
+  return supervisorOverride(req, res);
+});
+router.post('/supervisor/spot-queue/:id/reject', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), (req, res) => {
+  req.body.registration_id = req.params.id;
+  req.body.action = 'REJECT';
+  req.body.remarks = req.body.reason || req.body.remarks || 'Supervisor rejected';
+  return supervisorOverride(req, res);
+});
+router.get('/supervisor/overstay-alerts', authenticateToken, requireRoles('SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), getOverstayAlerts);
+router.post('/supervisor/overstay-alerts/:id/resolve', authenticateToken, requireRoles('SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), (req, res) => {
+  req.body.registration_id = req.params.id;
+  req.body.action = 'ESCALATE';
+  req.body.remarks = req.body.resolutionNotes || 'Alert resolved by supervisor';
+  return supervisorOverride(req, res);
+});
+router.get('/supervisor/visitors-inside', authenticateToken, requireRoles('GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), getVisitorsInsideCampus);
+router.get('/supervisor/gate-guards', authenticateToken, requireRoles('SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), getGatewiseStatsAndSelfRegistered);
+router.get('/supervisor/guards', authenticateToken, requireRoles('SUPERVISOR', 'SECURITY_HEAD', 'ADMIN'), async (req, res) => {
+  try {
+    const r = await db.query("SELECT id, name, email, phone, role FROM users WHERE role = 'GUARD' ORDER BY name ASC");
+    res.json({ success: true, guards: r.rows });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Failed to fetch guards.' });
+  }
+});
 
 /**
  * @openapi

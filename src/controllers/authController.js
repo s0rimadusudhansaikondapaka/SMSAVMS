@@ -16,9 +16,10 @@ function generateUserGuid(user) {
 const { logSystemAction } = require('../services/auditLogger');
 
 async function login(req, res) {
-  const { email, password } = req.body;
-  if (!email || !password) {
-    return res.status(400).json({ success: false, message: 'Email and password are required.' });
+  const { email, username, identifier, password } = req.body;
+  const loginIdentifier = (email || username || identifier || '').trim();
+  if (!loginIdentifier || !password) {
+    return res.status(400).json({ success: false, message: 'Email/username and password are required.' });
   }
 
   try {
@@ -26,8 +27,8 @@ async function login(req, res) {
       `SELECT u.*, d.name as department_name 
        FROM users u 
        LEFT JOIN departments d ON u.department_id = d.id 
-       WHERE u.email = $1 OR u.phone = $1`,
-      [email]
+       WHERE LOWER(u.email) = LOWER($1) OR u.phone = $1 OR UPPER(u.name) = UPPER($1)`,
+      [loginIdentifier]
     );
 
     if (result.rows.length === 0) {
