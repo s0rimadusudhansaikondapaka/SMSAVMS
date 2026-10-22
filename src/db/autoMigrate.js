@@ -14,7 +14,9 @@ async function runAutoMigrations() {
       await db.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;`);
       await db.query(`
         ALTER TABLE users 
-        ADD COLUMN IF NOT EXISTS user_type VARCHAR(50) DEFAULT 'RESIDENT';
+        ADD COLUMN IF NOT EXISTS user_type VARCHAR(50) DEFAULT 'RESIDENT',
+        ADD COLUMN IF NOT EXISTS reset_password_token VARCHAR(255),
+        ADD COLUMN IF NOT EXISTS reset_password_expires TIMESTAMP WITHOUT TIME ZONE;
       `);
       await db.query(`
         UPDATE users 

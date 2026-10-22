@@ -282,7 +282,9 @@ CREATE TABLE IF NOT EXISTS users (
   flat_info VARCHAR(100),
   created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
   user_type VARCHAR(50) DEFAULT 'RESIDENT'::character varying,
-  primary_resident_id INTEGER
+  primary_resident_id INTEGER,
+  reset_password_token VARCHAR(255),
+  reset_password_expires TIMESTAMP WITHOUT TIME ZONE
 );
 
 CREATE TABLE IF NOT EXISTS visitors (

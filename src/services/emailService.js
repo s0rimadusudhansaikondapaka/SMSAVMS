@@ -118,6 +118,57 @@ async function sendHostL1NotificationEmail({ hostEmail, hostName, visitorName, v
 }
 
 /**
+ * Send Password Reset Link Notification Email
+ */
+async function sendPasswordResetEmail({ userEmail, userName, resetUrl, requestedByAdmin = false }) {
+  if (!userEmail || !userEmail.includes('@')) {
+    console.log(`[EmailService] No valid email provided for ${userName}. Skipping password reset email.`);
+    return { success: false, reason: 'NO_EMAIL' };
+  }
+
+  const subject = `🔐 Password Reset Request - Sathya Sai Grama VMS`;
+  const contextMsg = requestedByAdmin
+    ? 'A system administrator has generated a secure password reset link for your Sathya Sai Grama VMS account.'
+    : 'We received a request to reset the password for your Sathya Sai Grama VMS account.';
+
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 2px solid #800000; border-radius: 10px; padding: 25px; background-color: #fffbf5;">
+      <div style="text-align: center; border-bottom: 2px solid #df6f06; padding-bottom: 15px;">
+        <h2 style="color: #4e081d; margin: 0;">Sathya Sai Grama, Muddenahalli</h2>
+        <h4 style="color: #df6f06; margin: 6px 0 0 0;">Visitor Management System (VMS)</h4>
+      </div>
+
+      <div style="padding: 20px 0;">
+        <p>Dear <strong>${userName || 'User'}</strong>,</p>
+        <p>${contextMsg}</p>
+        <p>Please click the secure button below to set a new password. This reset link is valid for <strong>1 hour</strong>.</p>
+
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${resetUrl}" style="background-color: #800000; color: #ffffff; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px; display: inline-block; box-shadow: 0 4px 12px rgba(128, 0, 0, 0.3);">
+            🔑 Set New Password
+          </a>
+        </div>
+
+        <div style="background-color: #ffffff; border: 1px solid #fed7aa; border-radius: 8px; padding: 12px 16px; margin: 20px 0; font-size: 13px; color: #475569; word-break: break-all;">
+          <strong>Direct Link:</strong><br />
+          <a href="${resetUrl}" style="color: #b84018;">${resetUrl}</a>
+        </div>
+
+        <p style="font-size: 13px; color: #64748b; margin-top: 20px;">
+          If you did not request a password reset, you can safely ignore this email. Your password will remain unchanged.
+        </p>
+      </div>
+
+      <div style="text-align: center; border-top: 1px solid #cbd5e1; padding-top: 15px; font-size: 12px; color: #64748b;">
+        <p>© Sathya Sai Grama Visitor Management System | Sri Sathya Sai Loka Seva Gurukulam</p>
+      </div>
+    </div>
+  `;
+
+  return await sendMail({ to: userEmail, subject, html });
+}
+
+/**
  * Generic Mail Delivery Core Helper
  */
 async function sendMail({ to, subject, html }) {
@@ -151,4 +202,5 @@ async function sendMail({ to, subject, html }) {
 module.exports = {
   sendVisitorApprovalEmail,
   sendHostL1NotificationEmail,
+  sendPasswordResetEmail,
 };

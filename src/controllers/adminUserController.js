@@ -1,8 +1,10 @@
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const db = require('../config/db');
 const QRCode = require('qrcode');
 const { broadcastSyncEvent } = require('../sockets/syncServer');
 const { logSystemAction } = require('../services/auditLogger');
+const { sendPasswordResetEmail } = require('../services/emailService');
 
 // Get all users for admin management
 async function getAllUsers(req, res) {
@@ -775,11 +777,132 @@ async function updateSingleUser(req, res) {
   }
 }
 
+// Admin Direct Change User Password
+async function adminChangeUserPassword(req, res) {
+  const { id } = req.params;
+  const { newPassword } = req.body;
+
+  if (!id) {
+    return res.status(400).json({ success: false, message: 'User ID is required.' });
+  }
+
+  if (!newPassword || String(newPassword).length < 6) {
+    return res.status(400).json({ success: false, message: 'New password must be at least 6 characters long.' });
+  }
+
+  try {
+    const existingRes = await db.query('SELECT id, name, email, role FROM users WHERE id = $1', [id]);
+    if (existingRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'User not found.' });
+    }
+
+    const targetUser = existingRes.rows[0];
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    await db.query(
+      `UPDATE users 
+       SET password_hash = $1, reset_password_token = NULL, reset_password_expires = NULL 
+       WHERE id = $2`,
+      [hashedPassword, id]
+    );
+
+    await logSystemAction(req, {
+      action: 'ADMIN_CHANGED_PASSWORD',
+      entity_type: 'USER',
+      entity_id: id,
+      remarks: `Admin ${req.user.name} directly changed password for user #${id} (${targetUser.name})`,
+    });
+
+    res.json({
+      success: true,
+      message: `Password for user '${targetUser.name}' (#${id}) has been successfully updated by Admin.`,
+    });
+  } catch (err) {
+    console.error('Admin change password error:', err);
+    res.status(500).json({ success: false, message: 'Server error updating user password.' });
+  }
+}
+
+// Admin Send Password Reset Link to User
+async function adminSendResetLink(req, res) {
+  const { id } = req.params;
+  const { app_url } = req.body;
+
+  if (!id) {
+    return res.status(400).json({ success: false, message: 'User ID is required.' });
+  }
+
+  try {
+    const existingRes = await db.query('SELECT id, name, email, phone, role FROM users WHERE id = $1', [id]);
+    if (existingRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'User not found.' });
+    }
+
+    const targetUser = existingRes.rows[0];
+
+    // Generate secure token (64 hex characters)
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const resetExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour validity
+
+    await db.query(
+      `UPDATE users 
+       SET reset_password_token = $1, reset_password_expires = $2 
+       WHERE id = $3`,
+      [resetToken, resetExpires, id]
+    );
+
+    let clientBaseUrl = (app_url || req.headers.origin || process.env.FRONTEND_URL || 'https://vms-qrf6.onrender.com').replace(/\/$/, '');
+    const resetUrl = `${clientBaseUrl}/reset-password?token=${resetToken}`;
+
+    let emailDelivered = false;
+    let emailReason = 'NO_EMAIL';
+
+    if (targetUser.email && targetUser.email.includes('@')) {
+      const emailResult = await sendPasswordResetEmail({
+        userEmail: targetUser.email,
+        userName: targetUser.name,
+        resetUrl,
+        requestedByAdmin: true,
+      });
+      emailDelivered = emailResult.success;
+      emailReason = emailResult.reason || '';
+    }
+
+    await logSystemAction(req, {
+      action: 'ADMIN_SENT_RESET_LINK',
+      entity_type: 'USER',
+      entity_id: id,
+      remarks: `Admin ${req.user.name} generated reset link for user #${id} (${targetUser.name})`,
+    });
+
+    res.json({
+      success: true,
+      message: emailDelivered 
+        ? `Password reset link successfully sent to ${targetUser.email}!` 
+        : targetUser.email 
+          ? `Password reset link generated (email status: pending/offline). Link is ready for sharing.` 
+          : `User has no registered email. Reset link generated for manual sharing.`,
+      reset_url: resetUrl,
+      token: resetToken,
+      user: {
+        id: targetUser.id,
+        name: targetUser.name,
+        email: targetUser.email,
+      },
+    });
+  } catch (err) {
+    console.error('Admin send reset link error:', err);
+    res.status(500).json({ success: false, message: 'Server error generating reset link.' });
+  }
+}
+
 module.exports = {
   getAllUsers,
   getDepartments,
   createSingleUser,
   updateSingleUser,
+  adminChangeUserPassword,
+  adminSendResetLink,
   bulkUploadUsers,
   bulkUploadVisitors,
   getGateCategoryRules,
