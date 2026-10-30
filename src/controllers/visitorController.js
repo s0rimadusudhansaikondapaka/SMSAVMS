@@ -5,6 +5,25 @@ const { broadcastSyncEvent } = require('../sockets/syncServer');
 const { sendVisitorApprovalEmail, sendVisitorRejectionEmail, sendHostL1NotificationEmail } = require('../services/emailService');
 const { logSystemAction } = require('../services/auditLogger');
 
+// Issue #52: Helper to encode full guest + visit metadata and reference ID into QR payload
+function formatQrPayload(reg, extra = {}) {
+  return JSON.stringify({
+    passCode: reg.pass_code || extra.passCode,
+    refId: reg.id || extra.regId,
+    regId: reg.id || extra.regId,
+    visitorName: reg.visitor_name || extra.visitorName || 'Guest',
+    phone: reg.visitor_phone || extra.phone || '',
+    category: reg.visitor_category || extra.category || 'GENERAL',
+    hostName: reg.host_name || extra.hostName || 'Ashram Host',
+    validFrom: reg.valid_from || extra.validFrom,
+    validUntil: reg.valid_until || extra.validUntil,
+    personCount: reg.person_count || extra.personCount || 1,
+    status: reg.status || extra.status || 'APPROVED',
+    isVvip: !!(reg.is_vvip || extra.isVvip)
+  });
+}
+
+
 // Helper to check L2 approval toggle status
 async function isL2Enabled() {
   const res = await db.query("SELECT value FROM system_settings WHERE key = 'L2_APPROVAL_ENABLED'");
@@ -427,7 +446,7 @@ function getHostInvitationPermissions(userType, userRole) {
 
     // If initialStatus is APPROVED (e.g. walk-in registered by Supervisor or VIP Host), generate QR Code immediately
     if (initialStatus === 'APPROVED') {
-      const qrData = JSON.stringify({ passCode, regId: nextRegId, isVvip: effectiveIsVvip });
+      const qrData = formatQrPayload(registration, { passCode, regId: nextRegId, visitorName: full_name, phone, category: visitor_category, hostName: req.user?.name, validFrom: validFromTime, validUntil: validUntilTime, personCount: totalCount, status: initialStatus, isVvip: effectiveIsVvip });
       const qrCodeUrl = await QRCode.toDataURL(qrData);
       const approverName = req.user?.name || (isSpotOrWalkin ? 'Guard Supervisor' : 'Direct Host Approval');
       const approverRole = req.user?.role || (isSpotOrWalkin ? 'SUPERVISOR' : 'HOST');
@@ -778,7 +797,7 @@ async function updateApproval(req, res) {
 
     let qrCodeUrl = reg.qr_code_url;
     if (newStatus === 'APPROVED' && !qrCodeUrl) {
-      const qrData = JSON.stringify({ passCode: reg.pass_code, regId: reg.id, isVvip: reg.is_vvip });
+      const qrData = formatQrPayload(reg, { hostName: req.user?.name, validFrom: parsedValidFrom, validUntil: parsedValidUntil });
       qrCodeUrl = await QRCode.toDataURL(qrData);
     }
 
@@ -1604,7 +1623,7 @@ async function generateRegistrationQr(req, res) {
   }
 
   try {
-    const regRes = await db.query('SELECT * FROM registrations WHERE id = $1', [registration_id]);
+    const regRes = await db.query('SELECT r.*, v.full_name as visitor_name, v.phone as visitor_phone, v.visitor_category, u.name as host_name FROM registrations r JOIN visitors v ON r.visitor_id = v.id LEFT JOIN users u ON r.host_id = u.id WHERE r.id = $1', [registration_id]);
     if (regRes.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Registration not found.' });
     }
@@ -1619,7 +1638,7 @@ async function generateRegistrationQr(req, res) {
 
     let qrCodeUrl = reg.qr_code_url;
     if (!qrCodeUrl) {
-      const qrData = JSON.stringify({ passCode: reg.pass_code, regId: reg.id, isVvip: reg.is_vvip });
+      const qrData = formatQrPayload(reg);
       qrCodeUrl = await QRCode.toDataURL(qrData);
       await db.query('UPDATE registrations SET qr_code_url = $1 WHERE id = $2', [qrCodeUrl, reg.id]);
     }
@@ -1667,7 +1686,7 @@ async function getPublicPassDetails(req, res) {
     const isExpired = !reg.is_permanent_pass && reg.valid_until && new Date() > new Date(reg.valid_until);
     let qrCodeUrl = reg.qr_code_url;
     if (!qrCodeUrl) {
-      const qrData = JSON.stringify({ passCode: reg.pass_code, regId: reg.id, isVvip: reg.is_vvip });
+      const qrData = formatQrPayload(reg);
       qrCodeUrl = await QRCode.toDataURL(qrData);
     }
 
@@ -1707,7 +1726,7 @@ async function getQrCodePngImage(req, res) {
   }
   try {
     const result = await db.query(
-      'SELECT pass_code, id, is_vvip FROM registrations WHERE pass_code = $1 OR CAST(id AS VARCHAR) = $1',
+      'SELECT r.*, v.full_name as visitor_name, v.phone as visitor_phone, v.visitor_category, u.name as host_name FROM registrations r JOIN visitors v ON r.visitor_id = v.id LEFT JOIN users u ON r.host_id = u.id WHERE r.pass_code = $1 OR CAST(r.id AS VARCHAR) = $1',
       [pass_code]
     );
 
@@ -1716,7 +1735,7 @@ async function getQrCodePngImage(req, res) {
     }
 
     const reg = result.rows[0];
-    const qrData = JSON.stringify({ passCode: reg.pass_code, regId: reg.id, isVvip: reg.is_vvip });
+    const qrData = formatQrPayload(reg);
     const buffer = await QRCode.toBuffer(qrData, { type: 'png', width: 400, margin: 2 });
 
     res.setHeader('Content-Type', 'image/png');
