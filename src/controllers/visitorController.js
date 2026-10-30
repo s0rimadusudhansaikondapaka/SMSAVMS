@@ -381,12 +381,13 @@ function getHostInvitationPermissions(userType, userRole) {
     const randomNum = Math.floor(1000 + Math.random() * 9000);
     const passCode = `${passCodePrefix}-${randomNum}`;
 
-    const menCount = parseInt(adult_men_count) || 1;
-    const womenCount = parseInt(adult_women_count) || 0;
+    const isFemaleGuest = req.body.gender === 'Female' || gender === 'Female';
+    const menCount = adult_men_count !== undefined && adult_men_count !== null && !isNaN(parseInt(adult_men_count)) ? parseInt(adult_men_count) : (isFemaleGuest ? 0 : 1);
+    const womenCount = adult_women_count !== undefined && adult_women_count !== null && !isNaN(parseInt(adult_women_count)) ? parseInt(adult_women_count) : (isFemaleGuest ? 1 : 0);
     const boysCount = parseInt(req.body.boys_count) || 0;
     const girlsCount = parseInt(req.body.girls_count) || 0;
     const kidsCount = children_count !== undefined ? parseInt(children_count) : (boysCount + girlsCount);
-    const totalCount = menCount + womenCount + boysCount + girlsCount;
+    const totalCount = Math.max(1, menCount + womenCount + boysCount + girlsCount);
 
     // Insert Registration
     const maxR = await db.query('SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM registrations');
@@ -1477,12 +1478,13 @@ async function createPublicVisitorRegistration(req, res) {
       });
     }
 
-    const menCount = parseInt(adult_men_count) || 1;
-    const womenCount = parseInt(adult_women_count) || 0;
+    const isFemaleGuest = req.body.gender === 'Female' || gender === 'Female';
+    const menCount = adult_men_count !== undefined && adult_men_count !== null && !isNaN(parseInt(adult_men_count)) ? parseInt(adult_men_count) : (isFemaleGuest ? 0 : 1);
+    const womenCount = adult_women_count !== undefined && adult_women_count !== null && !isNaN(parseInt(adult_women_count)) ? parseInt(adult_women_count) : (isFemaleGuest ? 1 : 0);
     const boys = parseInt(req.body.boys_count) || 0;
     const girls = parseInt(req.body.girls_count) || 0;
     const kidsCount = parseInt(children_count) || (boys + girls);
-    const totalCount = menCount + womenCount + kidsCount;
+    const totalCount = Math.max(1, menCount + womenCount + kidsCount);
 
     const maxR = await db.query('SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM registrations');
     const nextRegId = parseInt(maxR.rows[0].next_id, 10);
