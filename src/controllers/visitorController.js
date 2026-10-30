@@ -810,7 +810,8 @@ async function updateApproval(req, res) {
            children_count = $15,
            boys_count = $16,
            girls_count = $17,
-           person_count = $18
+           person_count = $18,
+           rejection_reason = CASE WHEN $1 = 'REJECTED' THEN $19 ELSE rejection_reason END
        WHERE id = $8`,
       [
         newStatus, 
@@ -830,7 +831,8 @@ async function updateApproval(req, res) {
         kCount,
         bCount,
         gCount,
-        totalCount
+        totalCount,
+        remarks || 'Rejected by Host'
       ]
     );
 
@@ -1680,6 +1682,7 @@ async function getPublicPassDetails(req, res) {
         is_valid: !isExpired && (reg.status === 'APPROVED' || reg.status === 'INSIDE_CAMPUS'),
         person_count: reg.person_count,
         registration_mode: reg.registration_mode,
+        rejection_reason: reg.rejection_reason || reg.remarks || null,
       }
     });
   } catch (err) {
