@@ -69,6 +69,53 @@ async function sendVisitorApprovalEmail({ visitorEmail, visitorName, passCode, v
 }
 
 /**
+ * Send Pass Rejection Notification Email to Visitor
+ */
+async function sendVisitorRejectionEmail({ visitorEmail, visitorName, passCode, hostName, rejectionReason }) {
+  if (!visitorEmail || !visitorEmail.includes('@')) {
+    console.log(`[EmailService] No valid visitor email provided for ${visitorName} (${passCode}). Skipping email dispatch.`);
+    return { success: false, reason: 'NO_EMAIL' };
+  }
+
+  const subject = `❌ Pass Request Update: Sathya Sai Grama Entry Pass [${passCode}]`;
+  const passUrl = `${process.env.FRONTEND_URL || 'https://vms-qrf6.onrender.com'}/pass/${passCode}`;
+
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 2px solid #b91c1c; border-radius: 10px; padding: 20px; background-color: #fffaf0;">
+      <div style="text-align: center; border-bottom: 2px solid #b91c1c; padding-bottom: 15px;">
+        <h2 style="color: #4e081d; margin: 0;">Sathya Sai Grama, Muddenahalli</h2>
+        <h4 style="color: #b91c1c; margin: 5px 0 0 0;">Visitor Access Pass Status: REJECTED</h4>
+      </div>
+
+      <div style="padding: 20px 0;">
+        <p>Dear <strong>${visitorName}</strong>,</p>
+        <p>Your visitor registration request to visit <strong>Sathya Sai Grama</strong> has been <strong>REJECTED</strong> by the host.</p>
+
+        <div style="background-color: #ffffff; border: 1px solid #fca5a5; border-radius: 8px; padding: 15px; margin: 15px 0;">
+          <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+            <tr><td style="padding: 5px; font-weight: bold; color: #4e081d;">Pass Code:</td><td style="padding: 5px; color: #b91c1c; font-size: 16px; font-weight: bold;">${passCode}</td></tr>
+            <tr><td style="padding: 5px; font-weight: bold; color: #4e081d;">Host Name:</td><td style="padding: 5px;">${hostName || 'Ashram Host'}</td></tr>
+            <tr><td style="padding: 5px; font-weight: bold; color: #4e081d;">Rejection Reason:</td><td style="padding: 5px; color: #b91c1c;">${rejectionReason || 'No reason specified'}</td></tr>
+          </table>
+        </div>
+
+        <div style="text-align: center; margin: 25px 0;">
+          <a href="${passUrl}" style="background-color: #64748b; color: #ffffff; padding: 10px 20px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 14px; display: inline-block;">
+            View Status Online
+          </a>
+        </div>
+      </div>
+
+      <div style="text-align: center; border-top: 1px solid #cbd5e1; padding-top: 15px; font-size: 12px; color: #64748b;">
+        <p>© Sathya Sai Grama Visitor Management System | Sri Sathya Sai Loka Seva Gurukulam</p>
+      </div>
+    </div>
+  `;
+
+  return await sendMail({ to: visitorEmail, subject, html });
+}
+
+/**
  * Send L1 Approval Request Notification Email to Host
  */
 async function sendHostL1NotificationEmail({ hostEmail, hostName, visitorName, visitorPhone, purpose, passCode, visitorCategory }) {
@@ -201,6 +248,7 @@ async function sendMail({ to, subject, html }) {
 
 module.exports = {
   sendVisitorApprovalEmail,
+  sendVisitorRejectionEmail,
   sendHostL1NotificationEmail,
   sendPasswordResetEmail,
 };

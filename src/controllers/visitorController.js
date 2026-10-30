@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const QRCode = require('qrcode');
 const db = require('../config/db');
 const { broadcastSyncEvent } = require('../sockets/syncServer');
-const { sendVisitorApprovalEmail, sendHostL1NotificationEmail } = require('../services/emailService');
+const { sendVisitorApprovalEmail, sendVisitorRejectionEmail, sendHostL1NotificationEmail } = require('../services/emailService');
 const { logSystemAction } = require('../services/auditLogger');
 
 // Helper to check L2 approval toggle status
@@ -873,6 +873,14 @@ async function updateApproval(req, res) {
         validFrom: parsedValidFrom || reg.valid_from,
         validUntil: parsedValidUntil || reg.valid_until,
         hostName: req.user.name,
+      });
+    } else if (newStatus === 'REJECTED' && reg.visitor_email) {
+      sendVisitorRejectionEmail({
+        visitorEmail: reg.visitor_email,
+        visitorName: reg.visitor_name,
+        passCode: reg.pass_code,
+        hostName: req.user.name,
+        rejectionReason: remarks || 'Rejected by Host',
       });
     }
 
