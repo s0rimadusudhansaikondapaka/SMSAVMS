@@ -31,25 +31,69 @@ function getISTParts(date) {
   };
 }
 
+
+// Issue #54: Centralized ± 8 hours SAT active window validation
+// Operating hours: 5:00 AM <= SAT <= SDT <= 10:00 PM
+function calculateActiveWindow(validFromInput, validUntilInput) {
+  const sat = validFromInput ? parseISTDateTime(validFromInput) : new Date();
+  const sdt = validUntilInput ? parseISTDateTime(validUntilInput) : new Date(sat.getTime() + 12 * 3600 * 1000);
+
+  const satParts = getISTParts(sat);
+  const sdtParts = getISTParts(sdt);
+  const satDay5AM = new Date(`${satParts.dateStr}T05:00:00+05:30`);
+  const sdtDay10PM = new Date(`${sdtParts.dateStr}T22:00:00+05:30`);
+
+  const satMinus8 = new Date(sat.getTime() - 8 * 60 * 60 * 1000);
+  const satPlus8 = new Date(sat.getTime() + 8 * 60 * 60 * 1000);
+
+  // If (SAT-8) > 5am of SAT date, active from (SAT-8); else active from 5am of SAT date
+  const activeStart = satMinus8 > satDay5AM ? satMinus8 : satDay5AM;
+
+  // If (SAT+8) < SDT, active till (SAT+8); else active till SDT (clamped to 10pm of SDT date)
+  let activeEnd = satPlus8 < sdt ? satPlus8 : sdt;
+  if (activeEnd > sdtDay10PM) {
+    activeEnd = sdtDay10PM;
+  }
+
+  return {
+    sat,
+    sdt,
+    activeStart,
+    activeEnd,
+    satDay5AM,
+    sdtDay10PM,
+  };
+}
+
 function computeVisitorStatuses(reg, customNow) {
   const now = customNow || new Date();
-  const validFrom = reg.valid_from ? parseISTDateTime(reg.valid_from) : new Date();
-  const validUntil = reg.valid_until ? parseISTDateTime(reg.valid_until) : new Date(validFrom.getTime() + 12 * 3600 * 1000);
+  const { sat, sdt, activeStart, activeEnd } = calculateActiveWindow(reg.valid_from, reg.valid_until);
+  const validFrom = sat;
+  const validUntil = sdt;
   const isPerm = isPermanentPass(reg);
-  const departureTimePassed = !isPerm && reg.valid_until && (now > validUntil);
 
   // Approval check: Pass must be approved, permanent, VVIP, or bypassed
   const isApproved = isPerm || !!reg.is_vvip || !!reg.bypassed_by_admin || reg.status === 'APPROVED' || reg.status === 'INSIDE_CAMPUS' || reg.status === 'CHECKED_OUT';
   const isPending = String(reg.status || '').startsWith('PENDING');
   const isRejected = reg.status === 'REJECTED';
 
-  // Point 5 & 6: Earliest arrival window is max(5:00 AM of SAT date in IST, SAT - 8 hours), not exceeding SDT
-  const fromParts = getISTParts(validFrom);
-  const day5AM = new Date(`${fromParts.dateStr}T05:00:00+05:30`);
-  const raw8HoursPrior = new Date(validFrom.getTime() - 8 * 60 * 60 * 1000);
-  const windowStart = raw8HoursPrior < day5AM ? day5AM : raw8HoursPrior;
-  const isWithinArrivalWindow = now >= windowStart;
-  const arrivalStatus = !isApproved ? 'NOT_APPROVED' : departureTimePassed ? 'EXPIRED' : !isWithinArrivalWindow ? 'TOO_EARLY' : 'ACTIVE_WINDOW';
+  // Issue #54: Boundary validation (active between activeStart and activeEnd)
+  const isTooEarly = !isPerm && now < activeStart;
+  const departureTimePassed = !isPerm && (now > sdt || now > activeEnd);
+  const isWithinArrivalWindow = isPerm || (now >= activeStart && now <= activeEnd);
+  const windowStart = activeStart;
+  const windowEnd = activeEnd;
+
+  let arrivalStatus = 'ACTIVE_WINDOW';
+  if (!isApproved) {
+    arrivalStatus = isRejected ? 'REJECTED' : 'NOT_APPROVED';
+  } else if (isTooEarly) {
+    arrivalStatus = 'TOO_EARLY';
+  } else if (departureTimePassed) {
+    arrivalStatus = 'EXPIRED';
+  } else {
+    arrivalStatus = 'ACTIVE_WINDOW';
+  }
 
   // Track if visitor has entered campus at least once
   const hasEnteredOnce = !!(reg.first_entry_at || reg.status === 'INSIDE_CAMPUS' || reg.status === 'CHECKED_OUT' || reg.lifecycle_status === 'CHECKED-IN' || reg.lifecycle_status === 'CHECKED-OUT');
@@ -240,34 +284,30 @@ async function verifyGatePass(req, res) {
         ? `${reg.host_name} (Host Pre-Approval)` 
         : 'System Approved';
 
+      const { sat, sdt, activeStart, activeEnd } = calculateActiveWindow(reg.valid_from, reg.valid_until);
       const isPerm = isPermanentPass(reg);
-      const validFrom = new Date(reg.valid_from);
-      const validUntil = new Date(reg.valid_until);
-      const windowStart = new Date(validFrom.getTime() - graceHours * 60 * 60 * 1000);
-      const windowEnd = new Date(validUntil.getTime() + graceHours * 60 * 60 * 1000);
-
       const isApproved = isPerm || !!reg.is_vvip || !!reg.bypassed_by_admin || reg.status === 'APPROVED' || reg.status === 'INSIDE_CAMPUS' || reg.status === 'CHECKED_OUT';
+      
+      const isTooEarly = !isPerm && now < activeStart;
+      const isExpired = !isPerm && (now > sdt || now > activeEnd);
+      const isActive = isPerm || (isApproved && !isTooEarly && !isExpired);
+      const windowStart = activeStart;
+      const windowEnd = activeEnd;
+
       let arrivalStatus = 'VALID_FOR_ENTRY';
       let arrivalMessage = isPerm
         ? 'Permanent Multi-Entry Passcard - Valid 24/7 for unlimited entry & exit'
-        : `Pass valid for entry (Allowed from ${graceHours}h before arrival until ${graceHours}h after departure)`;
-
-      const departureTimePassed = !isPerm && reg.valid_until && (now > validUntil);
+        : `Pass valid for entry (Active between ${activeStart.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} and ${activeEnd.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`;
 
       if (!isApproved) {
-        arrivalStatus = 'NOT_APPROVED';
-        arrivalMessage = `⛔ Entry Blocked: Visitor pass is not yet approved. Approval is pending (${reg.status === 'PENDING_L1' ? 'Awaiting Host (L1) Approval' : reg.status === 'PENDING_L2' ? 'Awaiting L2 Approval' : reg.status === 'PENDING_SUPERVISOR' ? 'Awaiting Guard Supervisor Approval' : reg.status}).`;
-      } else if (!isPerm) {
-        if (departureTimePassed) {
-          arrivalStatus = 'EXPIRED';
-          arrivalMessage = `⛔ Expired QR Code / Invalid Pass: Scheduled Departure Time (SDT: ${validUntil.toLocaleString()}) has passed.`;
-        } else if (now < windowStart) {
-          arrivalStatus = 'TOO_EARLY';
-          arrivalMessage = `⛔ Pass Arrival Window Not Open. Earliest entry allowed: ${windowStart.toLocaleString()}`;
-        } else if (now > windowEnd && reg.status !== 'INSIDE_CAMPUS' && reg.status !== 'CHECKED_OUT') {
-          arrivalStatus = 'ARRIVAL_EXPIRED';
-          arrivalMessage = `⚠️ Pass Arrival Window Expired (Window ended: ${windowEnd.toLocaleString()})`;
-        }
+        arrivalStatus = reg.status === 'REJECTED' ? 'REJECTED' : 'NOT_APPROVED';
+        arrivalMessage = `⛔ Inactive QR Code: Visitor pass is not approved (${reg.status === 'REJECTED' ? 'REJECTED by Host' : reg.status}).`;
+      } else if (isTooEarly) {
+        arrivalStatus = 'TOO_EARLY';
+        arrivalMessage = `⛔ Inactive QR Code: Scan attempt is too early. Pass will become active on ${activeStart.toLocaleDateString()} at ${activeStart.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`;
+      } else if (isExpired) {
+        arrivalStatus = 'EXPIRED';
+        arrivalMessage = `⛔ Inactive QR Code: Pass validity has expired. Pass was valid until ${activeEnd.toLocaleDateString()} at ${activeEnd.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`;
       }
 
       let egressStatus = 'NORMAL_EXIT';
@@ -287,6 +327,10 @@ async function verifyGatePass(req, res) {
       return {
         ...reg,
         ...computedStatuses,
+        is_active: isActive,
+        is_valid_for_entry: isActive,
+        arrival_status: arrivalStatus,
+        arrival_message: arrivalMessage,
         visitor_phone: isGuard ? maskedVisPhone : reg.visitor_phone,
         visitor_phone_masked: maskedVisPhone,
         id_number: isGuard ? null : reg.id_number,
@@ -398,16 +442,11 @@ async function processGateMovement(req, res) {
 
     const reg = regRes.rows[0];
 
+    const { sat, sdt, activeStart, activeEnd } = calculateActiveWindow(reg.valid_from, reg.valid_until);
     const isPerm = isPermanentPass(reg);
-    const graceHours = await getGraceHoursWindow();
     const now = new Date();
-    const validFrom = new Date(reg.valid_from);
-    const validUntil = new Date(reg.valid_until);
-    const validFromDate = new Date(validFrom);
-    const day5AM = new Date(validFromDate.getFullYear(), validFromDate.getMonth(), validFromDate.getDate(), 5, 0, 0, 0);
-    const rawWindowStart = new Date(validFrom.getTime() - graceHours * 60 * 60 * 1000);
-    const windowStart = rawWindowStart < day5AM ? day5AM : rawWindowStart;
-    const windowEnd = new Date(validUntil.getTime() + graceHours * 60 * 60 * 1000);
+    const windowStart = activeStart;
+    const windowEnd = activeEnd;
 
     if (direction === 'IN') {
       if (!isPerm && reg.status !== 'APPROVED' && reg.status !== 'CHECKED_OUT' && reg.status !== 'INSIDE_CAMPUS' && !reg.is_vvip && !reg.bypassed_by_admin) {
@@ -415,25 +454,21 @@ async function processGateMovement(req, res) {
         return res.status(400).json({ success: false, message: `Cannot process IN entry. Pass status is ${reg.status}` });
       }
 
-      // Rule 7: IN button should be only enabled till the Visitor's scheduled departure time, SDT. After that IN button should be disabled.
-      if (!isPerm && now > validUntil) {
+      // Issue #54: Enforce active window limits (5am <= SAT <= SDT <= 10pm)
+      if (!isPerm && (now > sdt || now > activeEnd)) {
         await db.query('ROLLBACK');
         return res.status(400).json({
           success: false,
-          message: `Scheduled departure time, SDT (${validUntil.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}) has passed. IN entry is disabled.`,
+          message: `Scheduled departure / active window (${activeEnd.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}) has passed. IN entry is disabled.`,
         });
       }
 
-      // Check if current time is before allowed arrival window
-      if (!isPerm && now < windowStart) {
-        const isAuthorizedGuard = ['GUARD', 'SUPERVISOR', 'SECURITY_HEAD', 'ADMIN', 'HOD'].includes(req.user?.role);
-        if (!req.body.override_expired && !isAuthorizedGuard) {
-          await db.query('ROLLBACK');
-          return res.status(400).json({
-            success: false,
-            message: `Entry window not yet open. Earliest allowed entry: ${windowStart.toLocaleString()}.`,
-          });
-        }
+      if (!isPerm && now < activeStart) {
+        await db.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `Entry window not yet open. Pass will become active on ${activeStart.toLocaleDateString()} at ${activeStart.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`,
+        });
       }
     }
 
