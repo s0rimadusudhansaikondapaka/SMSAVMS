@@ -411,6 +411,10 @@ function getHostInvitationPermissions(userType, userRole) {
     // Insert Registration
     const maxR = await db.query('SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM registrations');
     const nextRegId = parseInt(maxR.rows[0].next_id, 10);
+    const allowedVisitTypes = ['HOME', 'OFFICE', 'TOUR', 'BHAJAN', 'EVENT', 'ASHRAM'];
+    const rawVT = (visit_type || (isSpotOrWalkin ? 'TOUR' : 'HOME')).toUpperCase();
+    const safeVisitType = allowedVisitTypes.includes(rawVT) ? rawVT : (isSpotOrWalkin ? 'TOUR' : 'HOME');
+
     const regRes = await db.query(
       `INSERT INTO registrations 
        (id, visitor_id, host_id, family_member_id, purpose, registration_type, visit_type, stay_required, accommodation_approved, priority, status, pass_code, valid_from, valid_until, adult_men_count, adult_women_count, children_count, boys_count, girls_count, person_count, is_vvip, relationship_to_resident)
@@ -423,7 +427,7 @@ function getHostInvitationPermissions(userType, userRole) {
         familyMemberRecordId,
         purpose || (isSpotOrWalkin ? 'Spot / Walk-in Gate Visit' : (isVipOrHodHost ? 'VIP Ashram Visit' : 'Family Visit / Ashram Stay')),
         regType,
-        visit_type || (isSpotOrWalkin ? 'TOUR' : 'HOME'),
+        safeVisitType,
         stay_required || false,
         false,
         priority || (effectiveIsVvip ? 'P1' : 'P3'),
@@ -1525,7 +1529,9 @@ async function createPublicVisitorRegistration(req, res) {
 
     const maxR = await db.query('SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM registrations');
     const nextRegId = parseInt(maxR.rows[0].next_id, 10);
-    const finalVisitType = req.body.visit_type || 'HOME';
+    const allowedVisitTypes = ['HOME', 'OFFICE', 'TOUR', 'BHAJAN', 'EVENT', 'ASHRAM'];
+    const rawVisitType = (req.body.visit_type || 'HOME').toUpperCase();
+    const finalVisitType = allowedVisitTypes.includes(rawVisitType) ? rawVisitType : 'HOME';
 
     const regRes = await db.query(
       `INSERT INTO registrations 
