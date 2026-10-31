@@ -1369,12 +1369,9 @@ async function createPublicVisitorRegistration(req, res) {
     return res.status(400).json({ success: false, message: 'Host ID/GUID, Full Name, and Phone are required.' });
   }
 
-  // Issue #43: Photo and ID proof mandatory for guest self-registration
+  // Issue #43: Photo and ID proof document attachment mandatory for guest self-registration
   if (!photo_url) {
     return res.status(400).json({ success: false, message: 'Visitor face photo is mandatory. Please capture or upload your photo before submitting.' });
-  }
-  if (!id_card_number || !id_card_number.trim()) {
-    return res.status(400).json({ success: false, message: 'ID Document Number is mandatory. Please enter your valid ID card number.' });
   }
   if (!id_card_image_url) {
     return res.status(400).json({ success: false, message: 'ID Proof Document/Photo is mandatory. Please upload or capture your ID document proof.' });
