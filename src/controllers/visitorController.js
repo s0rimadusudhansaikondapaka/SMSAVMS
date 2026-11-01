@@ -1305,9 +1305,9 @@ async function getPublicHostInfo(req, res) {
       const tok = tokenRes.rows[0];
       const isExpired = tok.created_at && (new Date() - new Date(tok.created_at) > 4 * 24 * 60 * 60 * 1000);
       if (tok.is_used) {
-        return res.status(400).json({
-          success: false,
-          is_valid: false,
+        return res.status(200).json({
+          success: true,
+          is_valid: true,
           is_used: true,
           message: 'This single-use invitation link has already been used to submit a visitor registration and is now expired.',
           host: { id: tok.host_id, name: tok.name, residency_status: tok.residency_status, role: tok.role, user_type: tok.user_type }
