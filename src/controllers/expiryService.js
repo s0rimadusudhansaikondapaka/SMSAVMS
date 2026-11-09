@@ -37,14 +37,16 @@ async function checkExpiredRequests() {
   }
 }
 
-// 2. Auto-reject if host hasn't responded within X minutes
+// 2. Auto-reject if host hasn't responded within X minutes (Issue #67: ONLY for walk-in SPOT registrations at gate)
 async function checkHostTimeout() {
   try {
     const timeoutMinutes = parseInt(await getSettingValue('HOST_TIMEOUT_MINUTES', '30'), 10) || 30;
+    // Pre-approval visitor invite requests are scheduled in advance and must NEVER be auto-rejected by host timeout
     const result = await db.query(
       `UPDATE registrations 
        SET status = 'REJECTED' 
        WHERE status = 'PENDING_L1' 
+       AND registration_type = 'SPOT'
        AND host_notified_at IS NOT NULL 
        AND host_notified_at < CURRENT_TIMESTAMP - INTERVAL '${timeoutMinutes} minutes'
        RETURNING id, pass_code, host_id`

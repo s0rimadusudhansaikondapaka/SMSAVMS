@@ -608,6 +608,18 @@ async function runAutoMigrations() {
       console.error('[AutoMigration Notice] Error seeding sample invited visitors:', seedInvErr.message || seedInvErr);
     }
 
+    // Performance Optimization (Issue #66): Create indexes for fast query execution
+    try {
+      await db.query(`
+        CREATE INDEX IF NOT EXISTS idx_registrations_host_id ON registrations(host_id);
+        CREATE INDEX IF NOT EXISTS idx_registrations_status ON registrations(status);
+        CREATE INDEX IF NOT EXISTS idx_registrations_pass_code ON registrations(pass_code);
+        CREATE INDEX IF NOT EXISTS idx_registrations_valid_dates ON registrations(valid_from, valid_until);
+        CREATE INDEX IF NOT EXISTS idx_reg_vehicles_reg_id ON registration_vehicles(registration_id);
+        CREATE INDEX IF NOT EXISTS idx_gate_logs_reg_id ON gate_logs(registration_id);
+      `);
+    } catch (idxErr) {}
+
     console.log('[AutoMigration] All DB auto-migrations and seeds completed successfully!');
     return true;
   } catch (err) {

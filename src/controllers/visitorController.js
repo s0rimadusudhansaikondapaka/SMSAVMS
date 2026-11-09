@@ -24,6 +24,19 @@ function formatQrPayload(reg, extra = {}) {
 }
 
 
+// Issue #61 & #70: Helper to generate a collision-free unique pass code
+async function generateUniquePassCode(prefix = 'PASS') {
+  for (let i = 0; i < 15; i++) {
+    const num = Math.floor(100000 + Math.random() * 900000); // 6-digit code: 100000 - 999999
+    const candidate = `${prefix}-${num}`;
+    const check = await db.query('SELECT id FROM registrations WHERE pass_code = $1', [candidate]);
+    if (check.rows.length === 0) {
+      return candidate;
+    }
+  }
+  return `${prefix}-${Date.now().toString().slice(-6)}`;
+}
+
 // Helper to check L2 approval toggle status
 async function isL2Enabled() {
   const res = await db.query("SELECT value FROM system_settings WHERE key = 'L2_APPROVAL_ENABLED'");
@@ -114,6 +127,20 @@ async function createRegistration(req, res) {
         [nextVisId, full_name, phone, email || '', visitorGender, photo_url || '', id_type || 'Aadhaar', idCardNo, idCardNo, id_card_image_url || '', visitor_category || 'GENERAL', companyName]
       );
       visitorId = newVisitor.rows[0].id;
+    }
+
+    // Issue #71 & #72: If vehicle plate number is entered, Vehicle Type is strictly mandatory
+    const inputVehicles = (Array.isArray(vehicles) ? vehicles : []).slice(0, 5);
+    for (const veh of inputVehicles) {
+      if (veh && veh.plate_number && String(veh.plate_number).trim() !== '') {
+        if (!veh.vehicle_type || veh.vehicle_type === 'Select' || String(veh.vehicle_type).trim() === '') {
+          await db.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: `Please select a valid Vehicle Type for vehicle plate "${String(veh.plate_number).trim()}".`
+          });
+        }
+      }
     }
 
     const validFromTime = valid_from ? parseISTDateTime(valid_from) : new Date();
@@ -397,8 +424,7 @@ function getHostInvitationPermissions(userType, userRole) {
       : effectiveIsVvip 
       ? 'VVIP' 
       : 'PASS';
-    const randomNum = Math.floor(1000 + Math.random() * 9000);
-    const passCode = `${passCodePrefix}-${randomNum}`;
+    const passCode = await generateUniquePassCode(passCodePrefix);
 
     const isFemaleGuest = req.body.gender === 'Female' || gender === 'Female';
     const menCount = adult_men_count !== undefined && adult_men_count !== null && !isNaN(parseInt(adult_men_count)) ? parseInt(adult_men_count) : (isFemaleGuest ? 0 : 1);
@@ -799,14 +825,16 @@ async function updateApproval(req, res) {
       }
     }
 
-    let qrCodeUrl = reg.qr_code_url;
-    if (newStatus === 'APPROVED' && !qrCodeUrl) {
-      const qrData = formatQrPayload(reg, { hostName: req.user?.name, validFrom: parsedValidFrom, validUntil: parsedValidUntil });
-      qrCodeUrl = await QRCode.toDataURL(qrData);
-    }
-
     const parsedValidFrom = (valid_from && !isNaN(new Date(valid_from).getTime())) ? new Date(valid_from) : null;
     const parsedValidUntil = (valid_until && !isNaN(new Date(valid_until).getTime())) ? new Date(valid_until) : null;
+
+    let qrCodeUrl = reg.qr_code_url;
+    if (newStatus === 'APPROVED' && !qrCodeUrl) {
+      const qrData = formatQrPayload(reg, { hostName: req.user?.name, validFrom: parsedValidFrom || reg.valid_from, validUntil: parsedValidUntil || reg.valid_until });
+      qrCodeUrl = await QRCode.toDataURL(qrData);
+    } else if (newStatus === 'REJECTED') {
+      qrCodeUrl = null;
+    }
 
     const isApprovedOrPending = newStatus === 'APPROVED' || (newStatus && newStatus.startsWith('PENDING'));
     const approvedUserId = isApprovedOrPending ? req.user.id : null;
@@ -947,13 +975,23 @@ async function getHostRegistrations(req, res) {
       }
     }
 
-    // Fetch multiple vehicles for each registration
-    for (let reg of registrations) {
+    // Issue #66: Batch-fetch multiple vehicles for all registrations in ONE single query (avoids N+1 latency)
+    if (registrations.length > 0) {
+      const regIds = registrations.map(r => r.id);
       const vehRes = await db.query(
-        `SELECT * FROM registration_vehicles WHERE registration_id = $1`,
-        [reg.id]
+        `SELECT * FROM registration_vehicles WHERE registration_id = ANY($1::int[])`,
+        [regIds]
       );
-      reg.vehicles = vehRes.rows;
+      const vehMap = new Map();
+      for (const v of vehRes.rows) {
+        if (!vehMap.has(v.registration_id)) {
+          vehMap.set(v.registration_id, []);
+        }
+        vehMap.get(v.registration_id).push(v);
+      }
+      for (const reg of registrations) {
+        reg.vehicles = vehMap.get(reg.id) || [];
+      }
     }
 
     res.json({ success: true, registrations });
@@ -1461,7 +1499,21 @@ async function createPublicVisitorRegistration(req, res) {
       visitorId = newV.rows[0].id;
     }
 
-    const passCode = `PASS-${Math.floor(1000 + Math.random() * 9000)}`;
+    const passCode = await generateUniquePassCode('PASS');
+    // Issue #71 & #72: If vehicle plate number is entered, Vehicle Type is strictly mandatory
+    const inputVehicles = (Array.isArray(vehicles) ? vehicles : []).slice(0, 5);
+    for (const veh of inputVehicles) {
+      if (veh && veh.plate_number && String(veh.plate_number).trim() !== '') {
+        if (!veh.vehicle_type || veh.vehicle_type === 'Select' || String(veh.vehicle_type).trim() === '') {
+          await db.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: `Please select a valid Vehicle Type for vehicle plate "${String(veh.plate_number).trim()}".`
+          });
+        }
+      }
+    }
+
     const validFromTime = valid_from ? parseISTDateTime(valid_from) : new Date();
     let validUntilTime;
     if (valid_until) {
@@ -1699,7 +1751,11 @@ async function getPublicPassDetails(req, res) {
     const reg = result.rows[0];
     const isExpired = !reg.is_permanent_pass && reg.valid_until && new Date() > new Date(reg.valid_until);
     let qrCodeUrl = reg.qr_code_url;
-    if (!qrCodeUrl) {
+    // Issue #63 & #64: QR code should ONLY be generated for approved visits, not pending or rejected
+    const isApprovedPass = reg.status === 'APPROVED' || reg.status === 'INSIDE_CAMPUS';
+    if (!isApprovedPass) {
+      qrCodeUrl = null;
+    } else if (!qrCodeUrl) {
       const qrData = formatQrPayload(reg);
       qrCodeUrl = await QRCode.toDataURL(qrData);
     }
