@@ -645,7 +645,7 @@ async function getVisitorsInsideCampus(req, res) {
        FROM registrations r 
        JOIN visitors v ON r.visitor_id = v.id 
        LEFT JOIN users u ON r.host_id = u.id 
-       WHERE r.status = 'INSIDE_CAMPUS' 
+       WHERE (r.status = 'INSIDE_CAMPUS' OR r.presence_status = 'currently_inside') 
        ORDER BY r.created_at DESC`
     );
     res.json({ success: true, count: result.rows.length, visitors: result.rows });
